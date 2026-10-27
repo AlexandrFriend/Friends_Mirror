@@ -1,0 +1,42 @@
+import os
+import logging
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+import asyncio
+
+# Бот берет токен из переменной окружения BOT_TOKEN
+TOKEN = os.getenv("BOT_TOKEN")
+
+bot = Bot(token=TOKEN)
+dp = Dispatcher()
+
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message):
+    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="Пройти тест 24 вопроса", callback_data="start_24")]
+    ])
+    await message.answer("Привет! Я бот FriendsMirror. Давай проверим твою совместимость с другими.", reply_markup=keyboard)
+
+@dp.callback_query(lambda c: c.data == "start_24")
+async def process_start_24(callback: types.CallbackQuery):
+    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="В компании", callback_data="q1_0")],
+        [types.InlineKeyboardButton(text="В уединении", callback_data="q1_1")]
+    ])
+    await callback.message.edit_text("Вопрос 1: Как вы предпочитаете проводить свободное время?", reply_markup=keyboard)
+
+@dp.callback_query(lambda c: c.data.startswith("q1_"))
+async def process_q1(callback: types.CallbackQuery):
+    answer = callback.data.split("_")[1]
+    if answer == "0":
+        text = "В компании"
+    else:
+        text = "В уединении"
+    await callback.message.edit_text(f"Ты выбрал: {text}. Отлично, это только начало!")
+
+async def main():
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    asyncio.run(main())
