@@ -8,11 +8,32 @@ TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# ВОТ ЗДЕСЬ НАШИ ВОПРОСЫ:
+# Все 24 вопроса с текстом и вариантами
 QUESTIONS = {
-    "q1": ["В компании", "В уединении"],
-    "q2": ["Да", "Нет"],
-    "q3": ["Хорошо", "Ровно", "Негативно"],
+    "q1": {"text": "Как вы предпочитаете проводить свободное время?", "options": ["В компании", "В уединении"]},
+    "q2": {"text": "Ты соблюдаешь диеты или ограничения в питании?", "options": ["Да", "Нет"]},
+    "q3": {"text": "Ты любишь готовить сам(а)?", "options": ["Да", "Нет"]},
+    "q4": {"text": "Ты занимаешься спортом?", "options": ["Да", "Иногда", "Нет"]},
+    "q5": {"text": "Как ты относишься к курению и алкоголю?", "options": ["Хорошо", "Ровно", "Негативно"]},
+    "q6": {"text": "Для тебя важен здоровый образ жизни?", "options": ["Да", "Нет"]},
+    "q7": {"text": "Ты предпочитаешь активный отдых + экстрим или спокойный + релакс?", "options": ["Активный", "Спокойный"]},
+    "q8": {"text": "Какой жанр фильмов ты предпочтешь?", "options": ["Блокбастер", "Документальный", "Артхаус"]},
+    "q9": {"text": "В свой отпуск ты предпочтешь отдохнуть дома или отправиться в путешествие?", "options": ["Путешествие", "Дом"]},
+    "q10": {"text": "Выходной ты предпочтешь провести в ночном клубе, на природе или дома?", "options": ["Клуб", "Природа", "Дом"]},
+    "q11": {"text": "У тебя больше технический склад ума или гуманитарный?", "options": ["Технический", "Гуманитарный"]},
+    "q12": {"text": "Ты занимаешься саморазвитием или самопознанием?", "options": ["Да", "Нет"]},
+    "q13": {"text": "Ты любишь смотреть фильмы?", "options": ["Да", "Нет"]},
+    "q14": {"text": "Что бы ты выбрал посмотреть или поучаствовать: хоккей или кёрлинг?", "options": ["Хоккей", "Кёрлинг"]},
+    "q15": {"text": "Ты легко можешь пойти на риск или предпочитаешь лишний раз не рисковать?", "options": ["Риск", "Не рисковать"]},
+    "q16": {"text": "Ты любишь пробовать новое или предпочитаешь проверенное?", "options": ["Новое", "Проверенное"]},
+    "q17": {"text": "Ты легко заводишь новые знакомства или нет?", "options": ["Легко", "Нет"]},
+    "q18": {"text": "Ты предпочтешь для отдыха большую компанию, одного-двух друзей или лучше одному?", "options": ["Компания", "Один, два", "Одному"]},
+    "q19": {"text": "У тебя хорошо получается скрывать и контролировать свои эмоции?", "options": ["Да", "Нет"]},
+    "q20": {"text": "Что для тебя важнее: карьера или личное время на себя?", "options": ["Карьера", "Время"]},
+    "q21": {"text": "Ты предпочитаешь работать в команде или один?", "options": ["Команда", "Один"]},
+    "q22": {"text": "Ты предпочитаешь поп-культуру или альтернативную?", "options": ["Поп", "Альтернатива"]},
+    "q23": {"text": "Для тебя важнее порядок или спонтанность?", "options": ["Порядок", "Спонтанность"]},
+    "q24": {"text": "Ты рано встаешь или поздно (жаворонок или сова)?", "options": ["Жаворонок", "Сова"]},
 }
 
 @dp.message(Command("start"))
@@ -32,31 +53,31 @@ async def process_start_libido(callback: types.CallbackQuery):
     await callback.message.edit_text("Тест Либидо скоро появится здесь! (Это проверка кнопки)")
 
 async def send_question(message: types.Message, q_key: str):
-    options = QUESTIONS.get(q_key)
-    if not options:
-        await message.edit_text("Тест завершен!")
+    q_data = QUESTIONS.get(q_key)
+    if not q_data:
         return
 
+    question_text = q_data["text"]
+    options = q_data["options"]
     buttons = []
     for i, opt in enumerate(options):
         buttons.append([types.InlineKeyboardButton(text=opt, callback_data=f"ans_{q_key}_{i}")])
    
     keyboard = types.InlineKeyboardMarkup(inline_keyboard=buttons)
     q_num = q_key.replace("q", "")
-    await message.edit_text(f"Вопрос {q_num}: Выберите вариант:", reply_markup=keyboard)
+    await message.edit_text(f"Вопрос {q_num}: {question_text}", reply_markup=keyboard)
 
 @dp.callback_query(lambda c: c.data.startswith("ans_"))
 async def process_answer(callback: types.CallbackQuery):
     data = callback.data.split("_")
     q_key = data[1]
-   
     q_num = int(q_key.replace("q", ""))
     next_q_key = f"q{q_num + 1}"
    
     if next_q_key in QUESTIONS:
         await send_question(callback.message, next_q_key)
     else:
-        await callback.message.edit_text(f"Ты ответил на вопрос {q_num}. Тест завершен!")
+        await callback.message.edit_text("🎉 Поздравляю! Ты ответил на все 24 вопроса. Тест завершен!")
 
 async def main():
     await dp.start_polling(bot)
