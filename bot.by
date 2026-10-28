@@ -8,31 +8,55 @@ TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
+# ВОТ ЗДЕСЬ НАШИ ВОПРОСЫ:
+QUESTIONS = {
+    "q1": ["В компании", "В уединении"],
+    "q2": ["Да", "Нет"],
+    "q3": ["Хорошо", "Ровно", "Негативно"],
+}
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="Пройти тест 24 вопроса", callback_data="start_24")],
         [types.InlineKeyboardButton(text="Пройти тест Либидо", callback_data="start_libido")]
     ])
-    await message.answer("Привет! Я бот FriendsMirror. Выбери тест, который хочешь пройти:", reply_markup=keyboard)
+    await message.answer("Привет! Я бот FriendsMirror. Выбери тест:", reply_markup=keyboard)
 
 @dp.callback_query(lambda c: c.data == "start_24")
 async def process_start_24(callback: types.CallbackQuery):
-    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="В компании", callback_data="q1_0")],
-        [types.InlineKeyboardButton(text="В уединении", callback_data="q1_1")]
-    ])
-    await callback.message.edit_text("Вопрос 1: Как вы предпочитаете проводить свободное время?", reply_markup=keyboard)
+    await send_question(callback.message, "q1")
 
 @dp.callback_query(lambda c: c.data == "start_libido")
 async def process_start_libido(callback: types.CallbackQuery):
     await callback.message.edit_text("Тест Либидо скоро появится здесь! (Это проверка кнопки)")
 
-@dp.callback_query(lambda c: c.data.startswith("q1_"))
-async def process_q1(callback: types.CallbackQuery):
-    answer = callback.data.split("_")[1]
-    text = "В компании" if answer == "0" else "В уединении"
-    await callback.message.edit_text(f"Ты выбрал: {text}. Отлично!")
+async def send_question(message: types.Message, q_key: str):
+    options = QUESTIONS.get(q_key)
+    if not options:
+        await message.edit_text("Тест завершен!")
+        return
+
+    buttons = []
+    for i, opt in enumerate(options):
+        buttons.append([types.InlineKeyboardButton(text=opt, callback_data=f"ans_{q_key}_{i}")])
+   
+    keyboard = types.InlineKeyboardMarkup(inline_keyboard=buttons)
+    q_num = q_key.replace("q", "")
+    await message.edit_text(f"Вопрос {q_num}: Выберите вариант:", reply_markup=keyboard)
+
+@dp.callback_query(lambda c: c.data.startswith("ans_"))
+async def process_answer(callback: types.CallbackQuery):
+    data = callback.data.split("_")
+    q_key = data[1]
+   
+    q_num = int(q_key.replace("q", ""))
+    next_q_key = f"q{q_num + 1}"
+   
+    if next_q_key in QUESTIONS:
+        await send_question(callback.message, next_q_key)
+    else:
+        await callback.message.edit_text(f"Ты ответил на вопрос {q_num}. Тест завершен!")
 
 async def main():
     await dp.start_polling(bot)
