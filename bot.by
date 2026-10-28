@@ -8,7 +8,9 @@ TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Все 24 вопроса с текстом и вариантами
+# Словарь для хранения ответов пользователей (в памяти)
+user_answers = {}
+
 QUESTIONS = {
     "q1": {"text": "Как вы предпочитаете проводить свободное время?", "options": ["В компании", "В уединении"]},
     "q2": {"text": "Ты соблюдаешь диеты или ограничения в питании?", "options": ["Да", "Нет"]},
@@ -46,13 +48,15 @@ async def cmd_start(message: types.Message):
 
 @dp.callback_query(lambda c: c.data == "start_24")
 async def process_start_24(callback: types.CallbackQuery):
-    await send_question(callback.message, "q1")
+    user_id = callback.from_user.id
+    user_answers[user_id] = {}  # Очищаем старые ответы
+    await send_question(callback.message, "q1", user_id)
 
 @dp.callback_query(lambda c: c.data == "start_libido")
 async def process_start_libido(callback: types.CallbackQuery):
     await callback.message.edit_text("Тест Либидо скоро появится здесь! (Это проверка кнопки)")
 
-async def send_question(message: types.Message, q_key: str):
+async def send_question(message: types.Message, q_key: str, user_id: int):
     q_data = QUESTIONS.get(q_key)
     if not q_data:
         return
@@ -71,13 +75,38 @@ async def send_question(message: types.Message, q_key: str):
 async def process_answer(callback: types.CallbackQuery):
     data = callback.data.split("_")
     q_key = data[1]
+    answer_index = int(data[2])
+    user_id = callback.from_user.id
+
+    # Сохраняем ответ
+    if user_id not in user_answers:
+        user_answers[user_id] = {}
+    user_answers[user_id][q_key] = answer_index
+
     q_num = int(q_key.replace("q", ""))
     next_q_key = f"q{q_num + 1}"
    
     if next_q_key in QUESTIONS:
-        await send_question(callback.message, next_q_key)
+        await send_question(callback.message, next_q_key, user_id)
     else:
-        await callback.message.edit_text("🎉 Поздравляю! Ты ответил на все 24 вопроса. Тест завершен!")
+        await callback.message.edit_text("🎉 Поздравляю! Ты ответил на все 24 вопроса. Тест завершен!\n\nТеперь напиши /myanswers, чтобы увидеть свои ответы.")
+
+@dp.message(Command("myanswers"))
+async def show_answers(message: types.Message):
+    user_id = message.from_user.id
+    if user_id not in user_answers or not user_answers[user_id]:
+        await message.answer("Ты еще не прошел тест. Напиши /start и выбери тест.")
+        return
+
+    answers = user_answers[user_id]
+    text = "Твои ответы:\n\n"
+    for q_key, ans_idx in answers.items():
+        q_num = q_key.replace("q", "")
+        question = QUESTIONS[q_key]["text"]
+        option_text = QUESTIONS[q_key]["options"][ans_idx]
+        text += f"Вопрос {q_num}: {option_text}\n"
+
+    await message.answer(text)
 
 async def main():
     await dp.start_polling(bot)
