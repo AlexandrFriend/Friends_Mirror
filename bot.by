@@ -187,7 +187,7 @@ async def show_answers_callback(callback: types.CallbackQuery):
     text = "Твои ответы:\n\n"
     sorted_keys = sorted(answers.keys(), key=lambda k: int(k.replace("q", "")))
     for q_key in sorted_keys:
-    ans_idx = answers[q_key]
+        ans_idx = answers[q_key]
         q_num = q_key.replace("q", "")
         option_text = QUESTIONS[q_key]["options"][ans_idx]
         text += f"Вопрос {q_num}: {option_text}\n"
