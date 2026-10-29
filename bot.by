@@ -13,7 +13,7 @@ dp = Dispatcher()
 
 # --- Инициализация базы данных ---
 def init_db():
-    conn = sqlite3.connect('bot_database.db')
+conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
     # Таблица пользователей (никнеймы)
     cursor.execute('''CREATE TABLE IF NOT EXISTS users (
