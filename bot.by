@@ -1,5 +1,6 @@
 import os
 import logging
+import sqlite3
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -10,200 +11,257 @@ TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Хранилища в памяти
-user_nicknames = {}  # {user_id: nickname}
-user_answers = {}    # {user_id: {q_key: answer_index}}
+# --- Инициализация базы данных ---
+def init_db():
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    # Таблица пользователей (никнеймы)
+    cursor.execute('''CREATE TABLE IF NOT EXISTS users (
+        telegram_id INTEGER PRIMARY KEY,
+        nickname TEXT UNIQUE
+    )''')
+    # Таблица ответов на вопросы
+    cursor.execute('''CREATE TABLE IF NOT EXISTS answers (
+        telegram_id INTEGER,
+        q_key TEXT,
+        answer_index INTEGER,
+        PRIMARY KEY (telegram_id, q_key)
+    )''')
+    conn.commit()
+    conn.close()
 
-# Состояния для ввода ника
+# --- Функции работы с БД ---
+def save_user(telegram_id, nickname):
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute('INSERT OR REPLACE INTO users (telegram_id, nickname) VALUES (?, ?)', (telegram_id, nickname))
+    conn.commit()
+    conn.close()
+
+def get_user_nickname(telegram_id):
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT nickname FROM users WHERE telegram_id = ?', (telegram_id,))
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else None
+
+def get_user_by_nickname(nickname):
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    # Поиск без учета регистра (LOWER)
+    cursor.execute('SELECT telegram_id FROM users WHERE LOWER(nickname) = LOWER(?)', (nickname,))
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else None
+
+def clear_user_answers(telegram_id):
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM answers WHERE telegram_id = ?', (telegram_id,))
+    conn.commit()
+    conn.close()
+
+def save_answer(telegram_id, q_key, answer_index):
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute('INSERT OR REPLACE INTO answers (telegram_id, q_key, answer_index) VALUES (?, ?, ?)', (telegram_id, q_key, answer_index))
+    conn.commit()
+    conn.close()
+
+def get_user_answers(telegram_id):
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT q_key, answer_index FROM answers WHERE telegram_id = ?', (telegram_id,))
+    results = cursor.fetchall()
+    conn.close()
+    return {row[0]: row[1] for row in results}
+
+# --- Состояния ---
 class Form(StatesGroup):
-    waiting_for_nickname = State()  # при первом входе
-    waiting_for_friend_nickname = State()  # для поиска друга
+    waiting_for_nickname = State()
+    waiting_for_friend_nickname = State()
 
 QUESTIONS = {
-    "q1": {"text": "Как вы предпочитаете проводить свободное время?", "options": ["В компании", "В уединении"]},
-    "q2": {"text": "Ты соблюдаешь диеты или ограничения в питании?", "options": ["Да", "Нет"]},
-    "q3": {"text": "Ты любишь готовить сам(а)?", "options": ["Да", "Нет"]},
-    "q4": {"text": "Ты занимаешься спортом?", "options": ["Да", "Иногда", "Нет"]},
-    "q5": {"text": "Как ты относишься к курению и алкоголю?", "options": ["Хорошо", "Ровно", "Негативно"]},
-    "q6": {"text": "Для тебя важен здоровый образ жизни?", "options": ["Да", "Нет"]},
-    "q7": {"text": "Ты предпочитаешь активный отдых + экстрим или спокойный + релакс?", "options": ["Активный", "Спокойный"]},
-    "q8": {"text": "Какой жанр фильмов ты предпочтешь?", "options": ["Блокбастер", "Документальный", "Артхаус"]},
-    "q9": {"text": "В свой отпуск ты предпочтешь отдохнуть дома или отправиться в путешествие?", "options": ["Путешествие", "Дом"]},
-    "q10": {"text": "Выходной ты предпочтешь провести в ночном клубе, на природе или дома?", "options": ["Клуб", "Природа", "Дом"]},
-    "q11": {"text": "У тебя больше технический склад ума или гуманитарный?", "options": ["Технический", "Гуманитарный"]},
-    "q12": {"text": "Ты занимаешься саморазвитием или самопознанием?", "options": ["Да", "Нет"]},
-    "q13": {"text": "Ты любишь смотреть фильмы?", "options": ["Да", "Нет"]},
-    "q14": {"text": "Что бы ты выбрал посмотреть или поучаствовать: хоккей или кёрлинг?", "options": ["Хоккей", "Кёрлинг"]},
-    "q15": {"text": "Ты легко можешь пойти на риск или предпочитаешь лишний раз не рисковать?", "options": ["Риск", "Не рисковать"]},
-    "q16": {"text": "Ты любишь пробовать новое или предпочитаешь проверенное?", "options": ["Новое", "Проверенное"]},
-    "q17": {"text": "Ты легко заводишь новые знакомства или нет?", "options": ["Легко", "Нет"]},
-    "q18": {"text": "Ты предпочтешь для отдыха большую компанию, одного-двух друзей или лучше одному?", "options": ["Компания", "Один, два", "Одному"]},
-    "q19": {"text": "У тебя хорошо получается скрывать и контролировать свои эмоции?", "options": ["Да", "Нет"]},
-    "q20": {"text": "Что для тебя важнее: карьера или личное время на себя?", "options": ["Карьера", "Время"]},
-    "q21": {"text": "Ты предпочитаешь работать в команде или один?", "options": ["Команда", "Один"]},
-    "q22": {"text": "Ты предпочитаешь поп-культуру или альтернативную?", "options": ["Поп", "Альтернатива"]},
-    "q23": {"text": "Для тебя важнее порядок или спонтанность?", "options": ["Порядок", "Спонтанность"]},
-    "q24": {"text": "Ты рано встаешь или поздно (жаворонок или сова)?", "options": ["Жаворонок", "Сова"]},
+    "q1": {"text": "Как вы предпочитаете проводить свободное время?", "options": ["В компании", "В уединении"]},
+    "q2": {"text": "Ты соблюдаешь диеты или ограничения в питании?", "options": ["Да", "Нет"]},
+    "q3": {"text": "Ты любишь готовить сам(а)?", "options": ["Да", "Нет"]},
+    "q4": {"text": "Ты занимаешься спортом?", "options": ["Да", "Иногда", "Нет"]},
+    "q5": {"text": "Как ты относишься к курению и алкоголю?", "options": ["Хорошо", "Ровно", "Негативно"]},
+    "q6": {"text": "Для тебя важен здоровый образ жизни?", "options": ["Да", "Нет"]},
+    "q7": {"text": "Ты предпочитаешь активный отдых + экстрим или спокойный + релакс?", "options": ["Активный", "Спокойный"]},
+    "q8": {"text": "Какой жанр фильмов ты предпочтешь?", "options": ["Блокбастер", "Документальный", "Артхаус"]},
+    "q9": {"text": "В свой отпуск ты предпочтешь отдохнуть дома или отправиться в путешествие?", "options": ["Путешествие", "Дом"]},
+    "q10": {"text": "Выходной ты предпочтешь провести в ночном клубе, на природе или дома?", "options": ["Клуб", "Природа", "Дом"]},
+    "q11": {"text": "У тебя больше технический склад ума или гуманитарный?", "options": ["Технический", "Гуманитарный"]},
+    "q12": {"text": "Ты занимаешься саморазвитием или самопознанием?", "options": ["Да", "Нет"]},
+    "q13": {"text": "Ты любишь смотреть фильмы?", "options": ["Да", "Нет"]},
+    "q14": {"text": "Что бы ты выбрал посмотреть или поучаствовать: хоккей или кёрлинг?", "options": ["Хоккей", "Кёрлинг"]},
+    "q15": {"text": "Ты легко можешь пойти на риск или предпочитаешь лишний раз не рисковать?", "options": ["Риск", "Не рисковать"]},
+    "q16": {"text": "Ты любишь пробовать новое или предпочитаешь проверенное?", "options": ["Новое", "Проверенное"]},
+    "q17": {"text": "Ты легко заводишь новые знакомства или нет?", "options": ["Легко", "Нет"]},
+    "q18": {"text": "Ты предпочтешь для отдыха большую компанию, одного-двух друзей или лучше одному?", "options": ["Компания", "Один, два", "Одному"]},
+    "q19": {"text": "У тебя хорошо получается скрывать и контролировать свои эмоции?", "options": ["Да", "Нет"]},
+    "q20": {"text": "Что для тебя важнее: карьера или личное время на себя?", "options": ["Карьера", "Время"]},
+    "q21": {"text": "Ты предпочитаешь работать в команде или один?", "options": ["Команда", "Один"]},
+    "q22": {"text": "Ты предпочитаешь поп-культуру или альтернативную?", "options": ["Поп", "Альтернатива"]},
+    "q23": {"text": "Для тебя важнее порядок или спонтанность?", "options": ["Порядок", "Спонтанность"]},
+    "q24": {"text": "Ты рано встаешь или поздно (жаворонок или сова)?", "options": ["Жаворонок", "Сова"]},
 }
 
 def get_main_keyboard():
-    return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="Пройти тест 24 вопроса", callback_data="start_24")],
-        [types.InlineKeyboardButton(text="Пройти тест Либидо", callback_data="start_libido")],
-        [types.InlineKeyboardButton(text="Мои ответы", callback_data="my_answers")],
-        [types.InlineKeyboardButton(text="Найти совместимость", callback_data="find_match")]
-    ])
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="Пройти тест 24 вопроса", callback_data="start_24")],
+        [types.InlineKeyboardButton(text="Пройти тест Либидо", callback_data="start_libido")],
+        [types.InlineKeyboardButton(text="Мои ответы", callback_data="my_answers")],
+        [types.InlineKeyboardButton(text="Найти совместимость", callback_data="find_match")]
+    ])
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    if user_id not in user_nicknames:
-        await state.set_state(Form.waiting_for_nickname)
-        await message.answer("Привет! Давай познакомимся. Напиши свой никнейм (например, Max):")
-    else:
-        await message.answer(f"Привет, {user_nicknames[user_id]}! Выбери действие:", reply_markup=get_main_keyboard())
+    user_id = message.from_user.id
+    nickname = get_user_nickname(user_id)
+   
+    if not nickname:
+        await state.set_state(Form.waiting_for_nickname)
+        await message.answer("Привет! Давай познакомимся. Напиши свой никнейм (например, Max):")
+    else:
+        await message.answer(f"Привет, {nickname}! Выбери действие:", reply_markup=get_main_keyboard())
 
 @dp.message(Form.waiting_for_nickname)
 async def process_nickname(message: types.Message, state: FSMContext):
-    nickname = message.text.strip()
-    if not nickname:
-        await message.answer("Никнейм не может быть пустым. Напиши ник:")
-        return
-    user_id = message.from_user.id
-    user_nicknames[user_id] = nickname
-    await state.clear()
-    await message.answer(f"Отлично, {nickname}! Твой ник сохранён.\n\nТеперь выбери действие:", reply_markup=get_main_keyboard())
+    nickname = message.text.strip()
+    if not nickname:
+        await message.answer("Никнейм не может быть пустым. Напиши ник:")
+        return
+    user_id = message.from_user.id
+    save_user(user_id, nickname)
+    await state.clear()
+    await message.answer(f"Отлично, {nickname}! Твой ник сохранён.\n\nТеперь выбери действие:", reply_markup=get_main_keyboard())
 
-# --- Обработка кнопок главного меню ---
 @dp.callback_query(F.data == "start_24")
 async def process_start_24(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    if user_id not in user_nicknames:
-        await callback.message.edit_text("Сначала напиши /start и укажи ник.")
-        return
-    user_answers[user_id] = {}
-    await send_question(callback.message, "q1", user_id)
+    user_id = callback.from_user.id
+    nickname = get_user_nickname(user_id)
+    if not nickname:
+        await callback.message.edit_text("Сначала напиши /start и укажи ник.")
+        return
+    clear_user_answers(user_id)
+    await send_question(callback.message, "q1")
 
 @dp.callback_query(F.data == "start_libido")
 async def process_start_libido(callback: types.CallbackQuery):
-    await callback.message.edit_text("Тест Либидо скоро появится здесь! (Это проверка кнопки)")
+    await callback.message.edit_text("Тест Либидо скоро появится здесь! (Это проверка кнопки)")
 
 @dp.callback_query(F.data == "my_answers")
 async def show_answers_callback(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    if user_id not in user_answers or not user_answers[user_id]:
-        await callback.message.edit_text("Ты еще не прошел тест. Нажми /start и выбери тест.")
-        return
+    user_id = callback.from_user.id
+    answers = get_user_answers(user_id)
+   
+    if not answers:
+        await callback.message.edit_text("Ты еще не прошел тест. Нажми /start и выбери тест.")
+        return
 
-    answers = user_answers[user_id]
-    text = "Твои ответы:\n\n"
-    for q_key, ans_idx in answers.items():
-        q_num = q_key.replace("q", "")
-        option_text = QUESTIONS[q_key]["options"][ans_idx]
-        text += f"Вопрос {q_num}: {option_text}\n"
+    text = "Твои ответы:\n\n"
+    for q_key, ans_idx in answers.items():
+        q_num = q_key.replace("q", "")
+        option_text = QUESTIONS[q_key]["options"][ans_idx]
+        text += f"Вопрос {q_num}: {option_text}\n"
 
-    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="Назад в меню", callback_data="back_to_menu")]
-    ])
-    await callback.message.edit_text(text, reply_markup=keyboard)
+    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="Назад в меню", callback_data="back_to_menu")]
+    ])
+    await callback.message.edit_text(text, reply_markup=keyboard)
 
 @dp.callback_query(F.data == "find_match")
 async def ask_friend_nickname(callback: types.CallbackQuery, state: FSMContext):
-    await state.set_state(Form.waiting_for_friend_nickname)
-    await callback.message.edit_text("Введи никнейм друга, с которым хочешь сравнить совместимость:")
+    await state.set_state(Form.waiting_for_friend_nickname)
+    await callback.message.edit_text("Введи никнейм друга, с которым хочешь сравнить совместимость:")
 
 @dp.message(Form.waiting_for_friend_nickname)
 async def process_friend_nickname(message: types.Message, state: FSMContext):
-    friend_nickname = message.text.strip()
-    user_id = message.from_user.id
+    friend_nickname = message.text.strip()
+    user_id = message.from_user.id
 
-    # Ищем ID друга по нику
-    friend_id = None
-    for uid, nick in user_nicknames.items():
-        if nick.lower() == friend_nickname.lower() and uid != user_id:
-            friend_id = uid
-            break
+    friend_id = get_user_by_nickname(friend_nickname)
 
-    if not friend_id:
-        await message.answer("Пользователь с таким ником не найден. Попробуй ещё раз или напиши /start.")
-        await state.clear()
-        return
+    if not friend_id or friend_id == user_id:
+        await message.answer("Пользователь с таким ником не найден. Попробуй ещё раз или напиши /start.")
+        await state.clear()
+        return
 
-    # Проверяем, проходил ли друг тест
-    if friend_id not in user_answers or not user_answers[friend_id]:
-        await message.answer(f"Пользователь {friend_nickname} ещё не прошел тест.")
-        await state.clear()
-        return
+    ans_a = get_user_answers(user_id)
+    ans_b = get_user_answers(friend_id)
 
-    if user_id not in user_answers or not user_answers[user_id]:
-        await message.answer("Ты ещё не прошел тест. Сначала пройди тест 24 вопроса.")
-        await state.clear()
-        return
+    if not ans_b:
+        await message.answer(f"Пользователь {friend_nickname} ещё не прошел тест.")
+        await state.clear()
+        return
 
-    # Считаем процент
-    ans_a = user_answers[user_id]
-    ans_b = user_answers[friend_id]
-    score = 0
-    total = 0
-    for q_key in QUESTIONS.keys():
-        if q_key in ans_a and q_key in ans_b:
-            total += 1
-            if ans_a[q_key] == ans_b[q_key]:
-                score += 1
+    if not ans_a:
+        await message.answer("Ты ещё не прошел тест. Сначала пройди тест 24 вопроса.")
+        await state.clear()
+        return
 
-    if total == 0:
-        percent = 0
-    else:
-        percent = round((score / total) * 100)
+    score = 0
+    total = 0
+    for q_key in QUESTIONS.keys():
+        if q_key in ans_a and q_key in ans_b:
+            total += 1
+            if ans_a[q_key] == ans_b[q_key]:
+                score += 1
 
-    await message.answer(
-        f"Совместимость с {friend_nickname}:\n"
-        f"🎯 {percent}%\n\n"
-        f"(Совпало {score} из {total} общих ответов)",
-        reply_markup=get_main_keyboard()
-    )
-    await state.clear()
+    percent = round((score / total) * 100) if total > 0 else 0
+
+    await message.answer(
+        f"Совместимость с {friend_nickname}:\n"
+        f"🎯 {percent}%\n\n"
+        f"(Совпало {score} из {total} общих ответов)",
+        reply_markup=get_main_keyboard()
+    )
+    await state.clear()
 
 @dp.callback_query(F.data == "back_to_menu")
 async def back_to_menu(callback: types.CallbackQuery):
-    await callback.message.edit_text("Привет! Я бот FriendsMirror. Выбери действие:", reply_markup=get_main_keyboard())
+    user_id = callback.from_user.id
+    nickname = get_user_nickname(user_id)
+    await callback.message.edit_text(f"Привет, {nickname}! Выбери действие:", reply_markup=get_main_keyboard())
 
-# --- Логика вопросов ---
-async def send_question(message: types.Message, q_key: str, user_id: int):
-    q_data = QUESTIONS.get(q_key)
-    if not q_data:
-        return
-    question_text = q_data["text"]
-    options = q_data["options"]
-    buttons = [[types.InlineKeyboardButton(text=opt, callback_data=f"ans_{q_key}_{i}")] for i, opt in enumerate(options)]
-    keyboard = types.InlineKeyboardMarkup(inline_keyboard=buttons)
-    q_num = q_key.replace("q", "")
-    await message.edit_text(f"Вопрос {q_num}: {question_text}", reply_markup=keyboard)
+async def send_question(message: types.Message, q_key: str):
+    q_data = QUESTIONS.get(q_key)
+    if not q_data:
+        return
+    question_text = q_data["text"]
+    options = q_data["options"]
+    buttons = [[types.InlineKeyboardButton(text=opt, callback_data=f"ans_{q_key}_{i}")] for i, opt in enumerate(options)]
+    keyboard = types.InlineKeyboardMarkup(inline_keyboard=buttons)
+    q_num = q_key.replace("q", "")
+    await message.edit_text(f"Вопрос {q_num}: {question_text}", reply_markup=keyboard)
 
 @dp.callback_query(F.data.startswith("ans_"))
 async def process_answer(callback: types.CallbackQuery):
-    data = callback.data.split("_")
-    q_key = data[1]
-    answer_index = int(data[2])
-    user_id = callback.from_user.id
+    data = callback.data.split("_")
+    q_key = data[1]
+    answer_index = int(data[2])
+    user_id = callback.from_user.id
 
-    if user_id not in user_answers:
-        user_answers[user_id] = {}
-    user_answers[user_id][q_key] = answer_index
+    save_answer(user_id, q_key, answer_index)
 
-    q_num = int(q_key.replace("q", ""))
-    next_q_key = f"q{q_num + 1}"
-    if next_q_key in QUESTIONS:
-        await send_question(callback.message, next_q_key, user_id)
-    else:
-        keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="Посмотреть мои ответы", callback_data="my_answers")]
-        ])
-        await callback.message.edit_text("🎉 Поздравляю! Ты ответил на все 24 вопроса. Тест завершен!", reply_markup=keyboard)
+    q_num = int(q_key.replace("q", ""))
+    next_q_key = f"q{q_num + 1}"
+   
+    if next_q_key in QUESTIONS:
+        await send_question(callback.message, next_q_key)
+    else:
+        keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="Посмотреть мои ответы", callback_data="my_answers")]
+        ])
+        await callback.message.edit_text("🎉 Поздравляю! Ты ответил на все 24 вопроса. Тест завершен!", reply_markup=keyboard)
 
 async def main():
-    await dp.start_polling(bot)
+    init_db()  # Инициализируем базу данных при запуске
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    asyncio.run(main())
+    logging.basicConfig(level=logging.INFO)
+    asyncio.run(main())
