@@ -14,21 +14,21 @@ dp = Dispatcher()
 # --- Инициализация базы данных ---
 def init_db():
 conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    # Таблица пользователей (никнеймы)
-    cursor.execute('''CREATE TABLE IF NOT EXISTS users (
-        telegram_id INTEGER PRIMARY KEY,
-        nickname TEXT UNIQUE
-    )''')
-    # Таблица ответов на вопросы
-    cursor.execute('''CREATE TABLE IF NOT EXISTS answers (
-        telegram_id INTEGER,
-        q_key TEXT,
-        answer_index INTEGER,
-        PRIMARY KEY (telegram_id, q_key)
-    )''')
-    conn.commit()
-    conn.close()
+cursor = conn.cursor()
+# Таблица пользователей (никнеймы)
+cursor.execute('''CREATE TABLE IF NOT EXISTS users (
+telegram_id INTEGER PRIMARY KEY,
+nickname TEXT UNIQUE
+)''')
+# Таблица ответов на вопросы
+cursor.execute('''CREATE TABLE IF NOT EXISTS answers (
+telegram_id INTEGER,
+q_key TEXT,
+answer_index INTEGER,
+PRIMARY KEY (telegram_id, q_key)
+)''')
+conn.commit()
+conn.close()
 
 # --- Функции работы с БД ---
 def save_user(telegram_id, nickname):
