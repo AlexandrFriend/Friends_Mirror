@@ -256,8 +256,6 @@ async def process_friend_nickname(message: types.Message, state: FSMContext):
         reply_markup=get_main_keyboard()
     )
     await state.clear()
-
-@dp.
 @dp.callback_query(F.data == "find_match_libido")
 async def ask_libido_friend_nickname(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(Form.waiting_for_libido_friend_nickname)
