@@ -80,6 +80,7 @@ class Form(StatesGroup):
     waiting_for_nickname = State()
     waiting_for_friend_nickname = State()
     waiting_for_libido_friend_nickname = State()
+
 QUESTIONS = {
     "q1": {"text": "Как вы предпочитаете проводить свободное время?", "options": ["В компании", "В уединении"]},
     "q2": {"text": "Ты соблюдаешь диеты или ограничения в питании?", "options": ["Да", "Нет"]},
@@ -120,6 +121,7 @@ QUESTIONS_LIBIDO = {
     "l10": {"text": "Насколько для вас важна эмоциональная близость перед сексом?", "options": ["Крайне важна", "Важна", "Средне", "Не важна"]},
     "l11": {"text": "Как часто вы думаете о сексе в течение дня?", "options": ["Постоянно", "Часто", "Иногда", "Редко", "Никогда"]},
 }
+
 def get_main_keyboard():
     return types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="Пройти тест 24 вопроса", callback_data="start_24")],
@@ -173,6 +175,7 @@ async def process_start_libido(callback: types.CallbackQuery):
         return
     clear_user_answers(user_id, 'l')
     await send_question_libido(callback.message, "l1")
+
 @dp.callback_query(F.data == "my_answers")
 async def show_answers_callback(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -212,6 +215,7 @@ async def show_libido_answers_callback(callback: types.CallbackQuery):
         [types.InlineKeyboardButton(text="Назад в меню", callback_data="back_to_menu")]
     ])
     await callback.message.edit_text(text, reply_markup=keyboard)
+
 @dp.callback_query(F.data == "find_match")
 async def ask_friend_nickname(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(Form.waiting_for_friend_nickname)
@@ -222,22 +226,28 @@ async def process_friend_nickname(message: types.Message, state: FSMContext):
     friend_nickname = message.text.strip()
     user_id = message.from_user.id
     friend_id = get_user_by_nickname(friend_nickname)
+
     if not friend_id or friend_id == user_id:
         await message.answer("Пользователь с таким ником не найден. Попробуй ещё раз или напиши /start.")
         await state.clear()
         return
+
     ans_a = get_user_answers(user_id)
     ans_b = get_user_answers(friend_id)
+
+    # Оставляем только ответы по 24 вопросам
     ans_a = {k: v for k, v in ans_a.items() if k.startswith('q')}
     ans_b = {k: v for k, v in ans_b.items() if k.startswith('q')}
+
     if not ans_b:
-        await message.answer(f"Пользователь {friend_nickname} ещё не прошел тест 24 вопроса.")
+        await message.answer(f"Пользователь {friend_nickname} ещё не прошёл тест 24 вопроса.")
         await state.clear()
         return
     if not ans_a:
-        await message.answer("Ты ещё не прошел тест 24 вопроса. Сначала пройди его.")
+        await message.answer("Ты ещё не прошёл тест 24 вопроса. Сначала пройди его.")
         await state.clear()
         return
+
     score = 0
     total = 0
     for q_key in QUESTIONS.keys():
@@ -245,10 +255,19 @@ async def process_friend_nickname(message: types.Message, state: FSMContext):
             total += 1
             if ans_a[q_key] == ans_b[q_key]:
                 score += 1
+
     percent = round((score / total) * 100) if total > 0 else 0
+
     await message.answer(
         f"Совместимость (24 вопроса) с {friend_nickname}:\n"
-        f"�
+        f"🎯 {percent}%\n\n"
+        f"(Совпало {score} из {total} общих ответов)",
+        reply_markup=get_main_keyboard()
+    )
+    await state.clear()
+
+@dp.callback_query(F.data == "find_match_libido")
+async def ask_libido_friend_nickname(callback: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "find_match_libido")
 async def ask_libido_friend_nickname(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(Form.waiting_for_libido_friend_nickname)
@@ -298,6 +317,7 @@ async def process_libido_friend_nickname(message: types.Message, state: FSMConte
         reply_markup=get_main_keyboard()
     )
     await state.clear()
+
 @dp.callback_query(F.data == "back_to_menu")
 async def back_to_menu(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -339,6 +359,7 @@ async def send_question_libido(message: types.Message, l_key: str):
     ])
 
     await message.answer(l_data["text"], reply_markup=keyboard)
+
 # Обработчики ответов на вопросы
 
 @dp.callback_query(F.data.startswith("ans_24_"))
