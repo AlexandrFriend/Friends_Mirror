@@ -80,7 +80,6 @@ class Form(StatesGroup):
     waiting_for_nickname = State()
     waiting_for_friend_nickname = State()
     waiting_for_libido_friend_nickname = State()
-
 QUESTIONS = {
     "q1": {"text": "Как вы предпочитаете проводить свободное время?", "options": ["В компании", "В уединении"]},
     "q2": {"text": "Ты соблюдаешь диеты или ограничения в питании?", "options": ["Да", "Нет"]},
@@ -121,7 +120,6 @@ QUESTIONS_LIBIDO = {
     "l10": {"text": "Насколько для вас важна эмоциональная близость перед сексом?", "options": ["Крайне важна", "Важна", "Средне", "Не важна"]},
     "l11": {"text": "Как часто вы думаете о сексе в течение дня?", "options": ["Постоянно", "Часто", "Иногда", "Редко", "Никогда"]},
 }
-
 def get_main_keyboard():
     return types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="Пройти тест 24 вопроса", callback_data="start_24")],
@@ -214,7 +212,6 @@ async def show_libido_answers_callback(callback: types.CallbackQuery):
         [types.InlineKeyboardButton(text="Назад в меню", callback_data="back_to_menu")]
     ])
     await callback.message.edit_text(text, reply_markup=keyboard)
-
 @dp.callback_query(F.data == "find_match")
 async def ask_friend_nickname(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(Form.waiting_for_friend_nickname)
@@ -251,11 +248,7 @@ async def process_friend_nickname(message: types.Message, state: FSMContext):
     percent = round((score / total) * 100) if total > 0 else 0
     await message.answer(
         f"Совместимость (24 вопроса) с {friend_nickname}:\n"
-        f"🎯 {percent}%\n\n"
-        f"(Совпало {score} из {total} общих ответов)",
-        reply_markup=get_main_keyboard()
-    )
-    await state.clear()
+        f"�
 @dp.callback_query(F.data == "find_match_libido")
 async def ask_libido_friend_nickname(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(Form.waiting_for_libido_friend_nickname)
