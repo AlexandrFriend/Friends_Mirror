@@ -619,6 +619,7 @@ async def cmd_delete_me(message: types.Message, state: FSMContext):
 async def main():
     init_db()
     migrate_db()
+    await bot.delete_webhook(drop_pending_updates=True)  # <--- ДОБАВЬ ЭТУ СТРОКУ
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
