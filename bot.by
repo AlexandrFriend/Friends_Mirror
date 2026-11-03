@@ -148,12 +148,12 @@ QUESTIONS_LIBIDO = {
     "l3": {"text": "Вызывают ли у вас мысли о сексе интерес или отторжение?", "options": ["Только интерес", "Скорее интерес", "Нейтрально", "Скорее отторжение", "Только отторжение"]},
     "l4": {"text": "Испытываете ли вы дискомфорт при отсутствии секса?", "options": ["Сильный", "Умеренный", "Лёгкий", "Нет"]},
     "l5": {"text": "Как часто сексуальные контакты приносят вам удовлетворение?", "options": ["Всегда", "Часто", "Иногда", "Редко", "Никогда"]},
-    "l6": {"text": "Бывают ли у вас спонтанные сексуальные фантазии?", "options": ["Очень часто", "Часто", "Иногда", "Редко", "Никогда"]},
+    "l6": {"text": "Насколько важна для вас регулярность в интимной жизни?", "options": ["Критично важно", "Важно", "Средне", "Не важно"]},
     "l7": {"text": "Как вы оцениваете уровень своего либидо в целом?", "options": ["Очень высокий", "Высокий", "Средний", "Низкий", "Очень низкий"]},
     "l8": {"text": "Чувствуете ли вы себя желанным(ой)?", "options": ["Всегда", "Часто", "Иногда", "Редко", "Никогда"]},
     "l9": {"text": "Влияет ли стресс на ваше желание?", "options": ["Сильно снижает", "Снижает", "Не влияет", "Повышает"]},
     "l10": {"text": "Насколько для вас важна эмоциональная близость перед сексом?", "options": ["Крайне важна", "Важна", "Средне", "Не важна"]},
-    "l11": {"text": "Как часто вы думаете о сексе в течение дня?", "options": ["Постоянно", "Часто", "Иногда", "Редко", "Никогда"]},
+    "l11": {"text": "Как вы относитесь к экспериментам в интимной жизни?", "options": ["Очень положительно", "Скорее положительно", "Нейтрально", "Скорее отрицательно", "Отрицательно"]},
 }
 
 def get_main_keyboard():
@@ -321,13 +321,25 @@ async def ask_friend_nickname(callback: types.CallbackQuery, state: FSMContext):
 @dp.message(Form.waiting_for_friend_nickname)
 async def process_friend_nickname(message: types.Message, state: FSMContext):
     if not message.text:
-        await message.answer("Пришли текстом, пожалуйста.")
+        await message.answer("Пришли текстом, пожалуйста.", reply_markup=get_main_keyboard())
+        await state.clear()
         return
     friend_nickname = message.text.strip()
     user_id = message.from_user.id
     friend_id = get_user_by_nickname(friend_nickname)
-    if not friend_id or friend_id == user_id:
-        await message.answer("Пользователь с таким ником не найден. Попробуй ещё раз или напиши /start.")
+    if not friend_id:
+        await message.answer(
+            f"Пользователь с ником «{friend_nickname}» не найден. "
+            "Проверь написание или напиши /start.",
+            reply_markup=get_main_keyboard()
+        )
+        await state.clear()
+        return
+    if friend_id == user_id:
+        await message.answer(
+            "Это твой собственный ник. Введи ник друга, с кем хочешь сравнить.",
+            reply_markup=get_main_keyboard()
+        )
         await state.clear()
         return
     ans_a = get_user_answers(user_id)
@@ -335,11 +347,17 @@ async def process_friend_nickname(message: types.Message, state: FSMContext):
     ans_a = {k: v for k, v in ans_a.items() if k.startswith('q')}
     ans_b = {k: v for k, v in ans_b.items() if k.startswith('q')}
     if not ans_b:
-        await message.answer(f"Пользователь {friend_nickname} ещё не прошел тест 24 вопроса.")
+        await message.answer(
+            f"Пользователь {friend_nickname} ещё не прошел тест 24 вопроса.",
+            reply_markup=get_main_keyboard()
+        )
         await state.clear()
         return
     if not ans_a:
-        await message.answer("Ты ещё не прошел тест 24 вопроса. Сначала пройди его.")
+        await message.answer(
+            "Ты ещё не прошел тест 24 вопроса. Сначала пройди его.",
+            reply_markup=get_main_keyboard()
+        )
         await state.clear()
         return
     score = 0
@@ -366,13 +384,25 @@ async def ask_libido_friend_nickname(callback: types.CallbackQuery, state: FSMCo
 @dp.message(Form.waiting_for_libido_friend_nickname)
 async def process_libido_friend_nickname(message: types.Message, state: FSMContext):
     if not message.text:
-        await message.answer("Пришли текстом, пожалуйста.")
+        await message.answer("Пришли текстом, пожалуйста.", reply_markup=get_main_keyboard())
+        await state.clear()
         return
     friend_nickname = message.text.strip()
     user_id = message.from_user.id
     friend_id = get_user_by_nickname(friend_nickname)
-    if not friend_id or friend_id == user_id:
-        await message.answer("Пользователь с таким ником не найден. Попробуй ещё раз или напиши /start.")
+    if not friend_id:
+        await message.answer(
+            f"Пользователь с ником «{friend_nickname}» не найден. "
+            "Проверь написание или напиши /start.",
+            reply_markup=get_main_keyboard()
+        )
+        await state.clear()
+        return
+    if friend_id == user_id:
+        await message.answer(
+            "Это твой собственный ник. Введи ник друга, с кем хочешь сравнить.",
+            reply_markup=get_main_keyboard()
+        )
         await state.clear()
         return
     ans_a = get_user_answers(user_id)
@@ -380,11 +410,17 @@ async def process_libido_friend_nickname(message: types.Message, state: FSMConte
     ans_a = {k: v for k, v in ans_a.items() if k.startswith('l')}
     ans_b = {k: v for k, v in ans_b.items() if k.startswith('l')}
     if not ans_b:
-        await message.answer(f"Пользователь {friend_nickname} ещё не прошел тест Либидо.")
+        await message.answer(
+            f"Пользователь {friend_nickname} ещё не прошел тест Либидо.",
+            reply_markup=get_main_keyboard()
+        )
         await state.clear()
         return
     if not ans_a:
-        await message.answer("Ты ещё не прошел тест Либидо. Сначала пройди его.")
+        await message.answer(
+            "Ты ещё не прошел тест Либидо. Сначала пройди его.",
+            reply_markup=get_main_keyboard()
+        )
         await state.clear()
         return
     score = 0
