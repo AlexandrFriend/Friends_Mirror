@@ -1,7 +1,8 @@
 import sqlite3
 import sys
 
-DB = 'bot_database.db'
+import os
+DB = os.getenv("DATABASE_PATH", "/app/data/bot_database.db")
 
 def clear_fakes():
     conn = sqlite3.connect(DB)
