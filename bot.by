@@ -27,10 +27,46 @@ def init_db():
     conn.commit()
     conn.close()
 
-def save_user(telegram_id, nickname):
+def migrate_db():
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
-    cursor.execute('INSERT OR REPLACE INTO users (telegram_id, nickname) VALUES (?, ?)', (telegram_id, nickname))
+    cursor.execute("PRAGMA table_info(users)")
+    cols = [row[1] for row in cursor.fetchall()]
+    if 'age' not in cols:
+        cursor.execute("ALTER TABLE users ADD COLUMN age INTEGER")
+    if 'gender' not in cols:
+        cursor.execute("ALTER TABLE users ADD COLUMN gender TEXT")
+    if 'consent' not in cols:
+        cursor.execute("ALTER TABLE users ADD COLUMN consent INTEGER DEFAULT 0")
+    conn.commit()
+    conn.close()
+
+def update_user(telegram_id, **fields):
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute('INSERT OR IGNORE INTO users (telegram_id) VALUES (?)', (telegram_id,))
+    if fields:
+        cols = ", ".join(f"{k} = ?" for k in fields)
+        vals = list(fields.values()) + [telegram_id]
+        cursor.execute(f'UPDATE users SET {cols} WHERE telegram_id = ?', vals)
+    conn.commit()
+    conn.close()
+
+def get_user_full(telegram_id):
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT nickname, age, gender, consent FROM users WHERE telegram_id = ?', (telegram_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {'nickname': row[0], 'age': row[1], 'gender': row[2], 'consent': row[3]}
+
+def delete_user(telegram_id):
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM answers WHERE telegram_id = ?', (telegram_id,))
+    cursor.execute('DELETE FROM users WHERE telegram_id = ?', (telegram_id,))
     conn.commit()
     conn.close()
 
@@ -74,18 +110,11 @@ def get_user_answers(telegram_id):
 
 class Form(StatesGroup):
     waiting_for_nickname = State()
+    waiting_for_age = State()
+    waiting_for_gender = State()
     waiting_for_friend_nickname = State()
     waiting_for_libido_friend_nickname = State()
 
-def get_main_keyboard():
-    return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="Пройти тест 24 вопроса", callback_data="start_24")],
-        [types.InlineKeyboardButton(text="Пройти тест Либидо", callback_data="start_libido")],
-        [types.InlineKeyboardButton(text="Мои ответы (24)", callback_data="my_answers")],
-        [types.InlineKeyboardButton(text="Мои ответы (Либидо)", callback_data="my_answers_libido")],
-        [types.InlineKeyboardButton(text="Совместимость (24)", callback_data="find_match")],
-        [types.InlineKeyboardButton(text="Совместимость (Либидо)", callback_data="find_match_libido")]
-    ])
 QUESTIONS = {
     "q1": {"text": "Как вы предпочитаете проводить свободное время?", "options": ["В компании", "В уединении"]},
     "q2": {"text": "Ты соблюдаешь диеты или ограничения в питании?", "options": ["Да", "Нет"]},
@@ -126,16 +155,62 @@ QUESTIONS_LIBIDO = {
     "l10": {"text": "Насколько для вас важна эмоциональная близость перед сексом?", "options": ["Крайне важна", "Важна", "Средне", "Не важна"]},
     "l11": {"text": "Как часто вы думаете о сексе в течение дня?", "options": ["Постоянно", "Часто", "Иногда", "Редко", "Никогда"]},
 }
+
+def get_main_keyboard():
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="Пройти тест 24 вопроса", callback_data="start_24")],
+        [types.InlineKeyboardButton(text="Пройти тест Либидо", callback_data="start_libido")],
+        [types.InlineKeyboardButton(text="Мои ответы (24)", callback_data="my_answers")],
+        [types.InlineKeyboardButton(text="Мои ответы (Либидо)", callback_data="my_answers_libido")],
+        [types.InlineKeyboardButton(text="Совместимость (24)", callback_data="find_match")],
+        [types.InlineKeyboardButton(text="Совместимость (Либидо)", callback_data="find_match_libido")]
+    ])
+
+def get_consent_keyboard():
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="Согласен", callback_data="consent_agree")]
+    ])
+
+def get_gender_keyboard():
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="М", callback_data="gender_m"),
+         types.InlineKeyboardButton(text="Ж", callback_data="gender_f")]
+    ])
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
     user_id = message.from_user.id
-    nickname = get_user_nickname(user_id)
-    if not nickname:
-        await state.set_state(Form.waiting_for_nickname)
-        await message.answer("Привет! Давай познакомимся. Напиши свой никнейм (например, Max):")
+    user = get_user_full(user_id)
+    if not user or not user['consent']:
+        text = ("Привет! Это бот для поиска людей по совместимости.\n\n"
+                "Продолжая, ты соглашаешься на обработку твоих ответов, ника, возраста и пола "
+                "для работы сервиса. Данные хранятся в БД бота и не передаются третьим лицам. "
+                "Ты можешь удалить себя командой /delete_me.")
+        await message.answer(text, reply_markup=get_consent_keyboard())
     else:
-        await message.answer(f"Привет, {nickname}! Выбери действие:", reply_markup=get_main_keyboard())
+        await proceed_anketa(message, user_id, state)
+
+@dp.callback_query(F.data == "consent_agree")
+async def consent_agree(callback: types.CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    update_user(user_id, consent=1)
+    await proceed_anketa(callback.message, user_id, state)
+
+async def proceed_anketa(message: types.Message, user_id: int, state: FSMContext):
+    user = get_user_full(user_id)
+    if not user or not user['nickname']:
+        await state.set_state(Form.waiting_for_nickname)
+        await message.answer("Напиши свой никнейм (например, Max):")
+    elif not user['age']:
+        await state.set_state(Form.waiting_for_age)
+        await message.answer("Сколько тебе лет? Напиши число (например, 25):")
+    elif not user['gender']:
+        await state.set_state(Form.waiting_for_gender)
+        await message.answer("Укажи свой пол:", reply_markup=get_gender_keyboard())
+    else:
+        await state.clear()
+        await message.answer(f"Привет, {user['nickname']}! Выбери действие:", reply_markup=get_main_keyboard())
 
 @dp.message(Form.waiting_for_nickname)
 async def process_nickname(message: types.Message, state: FSMContext):
@@ -147,9 +222,36 @@ async def process_nickname(message: types.Message, state: FSMContext):
         await message.answer("Никнейм не может быть пустым. Напиши ник:")
         return
     user_id = message.from_user.id
-    save_user(user_id, nickname)
-    await state.clear()
-    await message.answer(f"Отлично, {nickname}! Твой ник сохранён.\n\nТеперь выбери действие:", reply_markup=get_main_keyboard())
+    update_user(user_id, nickname=nickname)
+    await proceed_anketa(message, user_id, state)
+
+@dp.message(Form.waiting_for_age)
+async def process_age(message: types.Message, state: FSMContext):
+    if not message.text:
+        await message.answer("Пришли число текстом, пожалуйста.")
+        return
+    text = message.text.strip()
+    if not text.isdigit():
+        await message.answer("Возраст должен быть числом. Попробуй ещё раз:")
+        return
+    age = int(text)
+    if age < 1 or age > 120:
+        await message.answer("Возраст должен быть от 1 до 120. Попробуй ещё раз:")
+        return
+    user_id = message.from_user.id
+    update_user(user_id, age=age)
+    await proceed_anketa(message, user_id, state)
+
+@dp.callback_query(F.data.startswith("gender_"))
+async def process_gender(callback: types.CallbackQuery, state: FSMContext):
+    code = callback.data.split("_", 1)[1]
+    if code not in ("m", "f"):
+        await callback.answer("Некорректный пол")
+        return
+    gender = "М" if code == "m" else "Ж"
+    user_id = callback.from_user.id
+    update_user(user_id, gender=gender)
+    await proceed_anketa(callback.message, user_id, state)
 
 @dp.callback_query(F.data == "start_24")
 async def process_start_24(callback: types.CallbackQuery):
@@ -210,6 +312,7 @@ async def show_libido_answers_callback(callback: types.CallbackQuery):
         [types.InlineKeyboardButton(text="Назад в меню", callback_data="back_to_menu")]
     ])
     await callback.message.edit_text(text, reply_markup=keyboard)
+
 @dp.callback_query(F.data == "find_match")
 async def ask_friend_nickname(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(Form.waiting_for_friend_nickname)
@@ -366,8 +469,27 @@ async def process_answer_libido(callback: types.CallbackQuery):
         ])
         await callback.message.edit_text("🎉 Поздравляю! Ты ответил на все 11 вопросов теста Либидо. Тест завершен!", reply_markup=keyboard)
 
+@dp.message(Command("profile"))
+async def cmd_profile(message: types.Message, state: FSMContext):
+    await state.clear()
+    user = get_user_full(message.from_user.id)
+    if not user or not user['nickname']:
+        await message.answer("Сначала пройди регистрацию: /start")
+        return
+    age = user['age'] if user['age'] is not None else "не указан"
+    gender = user['gender'] if user['gender'] else "не указан"
+    text = f"👤 Твой профиль:\n\nНик: {user['nickname']}\nВозраст: {age}\nПол: {gender}"
+    await message.answer(text, reply_markup=get_main_keyboard())
+
+@dp.message(Command("delete_me"))
+async def cmd_delete_me(message: types.Message, state: FSMContext):
+    await state.clear()
+    delete_user(message.from_user.id)
+    await message.answer("Твои данные удалены. Если захочешь вернуться — напиши /start.")
+
 async def main():
     init_db()
+    migrate_db()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
