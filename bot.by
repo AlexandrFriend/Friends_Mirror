@@ -1,18 +1,27 @@
 import os
 import logging
 import sqlite3
+from pathlib import Path
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 import asyncio
 
+# --- НАСТРОЙКА ПУТИ К БАЗЕ ДАННЫХ ---
+DATA_DIR = Path(os.environ.get("DATA_DIR", "/app/data"))
+try:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    DB_PATH = str(DATA_DIR / "bot_database.db")
+except Exception:
+    DB_PATH = "bot_database.db"  # Для локального запуска
+
 TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 def init_db():
-    conn = sqlite3.connect('bot_database.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''CREATE TABLE IF NOT EXISTS users (
         telegram_id INTEGER PRIMARY KEY,
@@ -32,7 +41,7 @@ def init_db():
     conn.close()
 
 def migrate_db():
-    conn = sqlite3.connect('bot_database.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("PRAGMA table_info(users)")
     cols = [row[1] for row in cursor.fetchall()]
@@ -52,7 +61,7 @@ def migrate_db():
     conn.close()
 
 def update_user(telegram_id, **fields):
-    conn = sqlite3.connect('bot_database.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('INSERT OR IGNORE INTO users (telegram_id) VALUES (?)', (telegram_id,))
     if fields:
@@ -63,7 +72,7 @@ def update_user(telegram_id, **fields):
     conn.close()
 
 def get_user_full(telegram_id):
-    conn = sqlite3.connect('bot_database.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('SELECT nickname, age, gender, consent FROM users WHERE telegram_id = ?', (telegram_id,))
     row = cursor.fetchone()
@@ -73,7 +82,7 @@ def get_user_full(telegram_id):
     return {'nickname': row[0], 'age': row[1], 'gender': row[2], 'consent': row[3]}
 
 def delete_user(telegram_id):
-    conn = sqlite3.connect('bot_database.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('DELETE FROM answers WHERE telegram_id = ?', (telegram_id,))
     cursor.execute('DELETE FROM users WHERE telegram_id = ?', (telegram_id,))
@@ -81,7 +90,7 @@ def delete_user(telegram_id):
     conn.close()
 
 def get_user_nickname(telegram_id):
-    conn = sqlite3.connect('bot_database.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('SELECT nickname FROM users WHERE telegram_id = ?', (telegram_id,))
     result = cursor.fetchone()
@@ -89,7 +98,7 @@ def get_user_nickname(telegram_id):
     return result[0] if result else None
 
 def get_user_by_nickname(nickname):
-    conn = sqlite3.connect('bot_database.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('SELECT telegram_id FROM users WHERE LOWER(nickname) = LOWER(?)', (nickname,))
     result = cursor.fetchone()
@@ -97,21 +106,21 @@ def get_user_by_nickname(nickname):
     return result[0] if result else None
 
 def clear_user_answers(telegram_id, prefix='q'):
-    conn = sqlite3.connect('bot_database.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('DELETE FROM answers WHERE telegram_id = ? AND q_key LIKE ?', (telegram_id, prefix + '%'))
     conn.commit()
     conn.close()
 
 def save_answer(telegram_id, q_key, answer_index):
-    conn = sqlite3.connect('bot_database.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('INSERT OR REPLACE INTO answers (telegram_id, q_key, answer_index) VALUES (?, ?, ?)', (telegram_id, q_key, answer_index))
     conn.commit()
     conn.close()
 
 def get_user_answers(telegram_id):
-    conn = sqlite3.connect('bot_database.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('SELECT q_key, answer_index FROM answers WHERE telegram_id = ?', (telegram_id,))
     results = cursor.fetchall()
@@ -119,7 +128,7 @@ def get_user_answers(telegram_id):
     return {row[0]: row[1] for row in results}
 
 def get_pool_users(exclude_id, prefix):
-    conn = sqlite3.connect('bot_database.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
         SELECT DISTINCT u.telegram_id
@@ -619,7 +628,7 @@ async def cmd_delete_me(message: types.Message, state: FSMContext):
 async def main():
     init_db()
     migrate_db()
-    await bot.delete_webhook(drop_pending_updates=True)  # <--- ДОБАВЬ ЭТУ СТРОКУ
+    await bot.delete_webhook(drop_pending_updates=True) # Сброс зависших подключений
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
