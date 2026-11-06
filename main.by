@@ -368,10 +368,12 @@ async def show_libido_answers_callback(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "top_10_q")
 async def show_top_10_q(callback: types.CallbackQuery):
+    await callback.answer("Ищу совпадения...")
     await _show_top(callback, 'q', QUESTIONS, '24 вопроса')
 
 @dp.callback_query(F.data == "top_10_l")
 async def show_top_10_l(callback: types.CallbackQuery):
+    await callback.answer("Ищу совпадения...")
     await _show_top(callback, 'l', QUESTIONS_LIBIDO, 'Либидо')
 
 async def _show_top(callback: types.CallbackQuery, prefix, questions, test_name):
