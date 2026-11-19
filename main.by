@@ -6,9 +6,9 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import LabeledPrice
 import asyncio
 
-# --- НАСТРОЙКА ПУТИ К БАЗЕ ДАННЫХ ---
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/app/data"))
 try:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -51,12 +51,15 @@ def migrate_db():
         cursor.execute("ALTER TABLE users ADD COLUMN gender TEXT")
     if 'consent' not in cols:
         cursor.execute("ALTER TABLE users ADD COLUMN consent INTEGER DEFAULT 0")
+    if 'libido_balance' not in cols: # ТЕПЕРЬ ЗДЕСЬ БАЛАНС ПОПЫТОК
+        cursor.execute("ALTER TABLE users ADD COLUMN libido_balance INTEGER DEFAULT 0")
+    
     cursor.execute("SELECT value FROM meta WHERE key = 'version'")
     row = cursor.fetchone()
     version = int(row[0]) if row else 1
-    if version < 2:
+    if version < 4:
         cursor.execute("DELETE FROM answers WHERE q_key IN ('l6', 'l11')")
-        cursor.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('version', '2')")
+        cursor.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('version', '4')")
     conn.commit()
     conn.close()
 
@@ -74,12 +77,12 @@ def update_user(telegram_id, **fields):
 def get_user_full(telegram_id):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute('SELECT nickname, age, gender, consent FROM users WHERE telegram_id = ?', (telegram_id,))
+    cursor.execute('SELECT nickname, age, gender, consent, libido_balance FROM users WHERE telegram_id = ?', (telegram_id,))
     row = cursor.fetchone()
     conn.close()
     if not row:
         return None
-    return {'nickname': row[0], 'age': row[1], 'gender': row[2], 'consent': row[3]}
+    return {'nickname': row[0], 'age': row[1], 'gender': row[2], 'consent': row[3], 'libido_balance': row[4]}
 
 def delete_user(telegram_id):
     conn = sqlite3.connect(DB_PATH)
@@ -161,6 +164,7 @@ class Form(StatesGroup):
     waiting_for_libido_friend_nickname = State()
     waiting_for_msg_text = State()
 
+# ... (СЛОВАРИ QUESTIONS И QUESTIONS_LIBIDO ОСТАЮТСЯ БЕЗ ИЗМЕНЕНИЙ) ...
 QUESTIONS = {
     "q1": {"text": "Как вы предпочитаете проводить свободное время?", "options": ["В компании", "В уединении"]},
     "q2": {"text": "Ты соблюдаешь диеты или ограничения в питании?", "options": ["Да", "Нет"]},
@@ -205,13 +209,13 @@ QUESTIONS_LIBIDO = {
 def get_main_keyboard():
     return types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="Пройти тест 24 вопроса", callback_data="start_24")],
-        [types.InlineKeyboardButton(text="Пройти тест Либидо", callback_data="start_libido")],
+        [types.InlineKeyboardButton(text="💎 Тест Либидо", callback_data="start_libido")],
         [types.InlineKeyboardButton(text="Мои ответы (24)", callback_data="my_answers")],
         [types.InlineKeyboardButton(text="Мои ответы (Либидо)", callback_data="my_answers_libido")],
         [types.InlineKeyboardButton(text="🏆 Топ-10 (24)", callback_data="top_10_q")],
-        [types.InlineKeyboardButton(text="🏆 Топ-10 (Либидо)", callback_data="top_10_l")],
+        [types.InlineKeyboardButton(text="💎 Топ-10 (Либидо)", callback_data="top_10_l")],
         [types.InlineKeyboardButton(text="Поиск по нику (24)", callback_data="find_match")],
-        [types.InlineKeyboardButton(text="Поиск по нику (Либидо)", callback_data="find_match_libido")]
+        [types.InlineKeyboardButton(text="💎 Поиск по нику (Либидо)", callback_data="find_match_libido")]
     ])
 
 def get_consent_keyboard():
@@ -225,6 +229,7 @@ def get_gender_keyboard():
          types.InlineKeyboardButton(text="Ж", callback_data="gender_f")]
     ])
 
+# ... (ОСТАЛЬНЫЕ ОБРАБОТЧИКИ СТАРТА И РЕГИСТРАЦИИ) ...
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
@@ -262,86 +267,109 @@ async def proceed_anketa(message: types.Message, user_id: int, state: FSMContext
 
 @dp.message(Form.waiting_for_nickname)
 async def process_nickname(message: types.Message, state: FSMContext):
-    if not message.text:
-        await message.answer("Пришли текстом, пожалуйста.")
-        return
+    if not message.text: return await message.answer("Пришли текстом, пожалуйста.")
     nickname = message.text.strip()
-    if not nickname:
-        await message.answer("Никнейм не может быть пустым. Напиши ник:")
-        return
-    user_id = message.from_user.id
-    update_user(user_id, nickname=nickname)
-    await proceed_anketa(message, user_id, state)
+    if not nickname: return await message.answer("Никнейм не может быть пустым. Напиши ник:")
+    update_user(message.from_user.id, nickname=nickname)
+    await proceed_anketa(message, message.from_user.id, state)
 
 @dp.message(Form.waiting_for_age)
 async def process_age(message: types.Message, state: FSMContext):
-    if not message.text:
-        await message.answer("Пришли число текстом, пожалуйста.")
-        return
+    if not message.text: return await message.answer("Пришли число текстом, пожалуйста.")
     text = message.text.strip()
-    if not text.isdigit():
-        await message.answer("Возраст должен быть числом. Попробуй ещё раз:")
-        return
+    if not text.isdigit(): return await message.answer("Возраст должен быть числом. Попробуй ещё раз:")
     age = int(text)
-    if age < 1 or age > 120:
-        await message.answer("Возраст должен быть от 1 до 120. Попробуй ещё раз:")
-        return
-    user_id = message.from_user.id
-    update_user(user_id, age=age)
-    await proceed_anketa(message, user_id, state)
+    if age < 1 or age > 120: return await message.answer("Возраст должен быть от 1 до 120. Попробуй ещё раз:")
+    update_user(message.from_user.id, age=age)
+    await proceed_anketa(message, message.from_user.id, state)
 
 @dp.callback_query(F.data.startswith("gender_"))
 async def process_gender(callback: types.CallbackQuery, state: FSMContext):
     code = callback.data.split("_", 1)[1]
-    if code not in ("m", "f"):
-        await callback.answer("Некорректный пол")
-        return
+    if code not in ("m", "f"): return await callback.answer("Некорректный пол")
     gender = "М" if code == "m" else "Ж"
-    user_id = callback.from_user.id
-    update_user(user_id, gender=gender)
-    await proceed_anketa(callback.message, user_id, state)
+    update_user(callback.from_user.id, gender=gender)
+    await proceed_anketa(callback.message, callback.from_user.id, state)
 
-@dp.callback_query(F.data == "start_24")
-async def process_start_24(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    nickname = get_user_nickname(user_id)
-    if not nickname:
-        await callback.message.edit_text("Сначала напиши /start и укажи ник.")
-        return
-    clear_user_answers(user_id, 'q')
-    await send_question_24(callback.message, "q1")
+# --- СИСТЕМА ОПЛАТЫ ЗА ИСПОЛЬЗОВАНИЕ (ПОПЫТКИ) ---
+async def check_libido_access(message_or_callback, user_id):
+    user = get_user_full(user_id)
+    balance = user.get('libido_balance', 0)
+    
+    if balance > 0:
+        # Списываем 1 попытку
+        update_user(user_id, libido_balance=balance - 1)
+        return True
+    else:
+        # Отправляем счет на покупку пакета из 5 попыток за 25 Stars
+        prices = [LabeledPrice(label="Пакет на 5 попыток Либидо", amount=25)] 
+        await bot.send_invoice(
+            chat_id=user_id,
+            title="Пакет Либидо",
+            description="Вы получите 5 использований любых функций Либидо (тест, топ, поиск).",
+            payload="libido_pack_payload",
+            provider_token="", 
+            currency="XTR", # Telegram Stars
+            prices=prices
+        )
+        return False
+
+@dp.pre_checkout_query()
+async def process_pre_checkout_query(pre_checkout_query: types.PreCheckoutQuery):
+    await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
+
+@dp.message(F.successful_payment)
+async def process_successful_payment(message: types.Message):
+    user = get_user_full(message.from_user.id)
+    balance = user.get('libido_balance', 0)
+    # Начисляем 5 попыток
+    update_user(message.from_user.id, libido_balance=balance + 5)
+    await message.answer("✅ Оплата прошла успешно! Вам начислено 5 попыток для раздела Либидо.", reply_markup=get_main_keyboard())
 
 @dp.callback_query(F.data == "start_libido")
 async def process_start_libido(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-    nickname = get_user_nickname(user_id)
-    if not nickname:
-        await callback.message.edit_text("Сначала напиши /start и укажи ник.")
-        return
+    if not get_user_nickname(user_id):
+        return await callback.message.edit_text("Сначала напиши /start и укажи ник.")
+        
+    if not await check_libido_access(callback.message, user_id):
+        return 
+        
     clear_user_answers(user_id, 'l')
     await send_question_libido(callback.message, "l1")
 
+@dp.callback_query(F.data == "top_10_l")
+async def show_top_10_l(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    if not await check_libido_access(callback.message, user_id):
+        return
+    await callback.answer("Ищу совпадения...")
+    await _show_top(callback, 'l', QUESTIONS_LIBIDO, 'Либидо')
+
+@dp.callback_query(F.data == "find_match_libido")
+async def ask_libido_friend_nickname(callback: types.CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    if not await check_libido_access(callback.message, user_id):
+        return
+        
+    await state.set_state(Form.waiting_for_libido_friend_nickname)
+    await callback.message.edit_text("Введи часть никнейма для поиска по Либидо:")
+
+# --- ОСТАЛЬНОЙ ФУНКЦИОНАЛ ---
 @dp.callback_query(F.data == "my_answers")
 async def show_answers_callback(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     answers = get_user_answers(user_id)
     filtered = {k: v for k, v in answers.items() if k.startswith('q')}
-    if not filtered:
-        await callback.message.edit_text("Ты еще не прошел тест 24 вопроса. Нажми /start и выбери тест.")
-        return
+    if not filtered: return await callback.message.edit_text("Ты еще не прошел тест 24 вопроса. Нажми /start и выбери тест.")
     sorted_keys = sorted(filtered.keys(), key=lambda k: int(k.replace("q", "")))
     text = "Твои ответы (тест 24):\n\n"
     for q_key in sorted_keys:
         ans_idx = filtered[q_key]
-        try:
-            option_text = QUESTIONS[q_key]["options"][ans_idx]
-        except (KeyError, IndexError):
-            option_text = "—"
-        q_num = q_key.replace("q", "")
-        text += f"Вопрос {q_num}: {option_text}\n"
-    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="Назад в меню", callback_data="back_to_menu")]
-    ])
+        try: option_text = QUESTIONS[q_key]["options"][ans_idx]
+        except: option_text = "—"
+        text += f"Вопрос {q_key.replace('q', '')}: {option_text}\n"
+    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="Назад в меню", callback_data="back_to_menu")]])
     await callback.message.edit_text(text, reply_markup=keyboard)
 
 @dp.callback_query(F.data == "my_answers_libido")
@@ -349,22 +377,15 @@ async def show_libido_answers_callback(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     answers = get_user_answers(user_id)
     filtered = {k: v for k, v in answers.items() if k.startswith('l')}
-    if not filtered:
-        await callback.message.edit_text("Ты еще не прошел тест Либидо. Нажми /start и выбери тест.")
-        return
+    if not filtered: return await callback.message.edit_text("Ты еще не прошел тест Либидо.")
     sorted_keys = sorted(filtered.keys(), key=lambda k: int(k.replace("l", "")))
     text = "Твои ответы (тест Либидо):\n\n"
     for l_key in sorted_keys:
         ans_idx = filtered[l_key]
-        try:
-            option_text = QUESTIONS_LIBIDO[l_key]["options"][ans_idx]
-        except (KeyError, IndexError):
-            option_text = "—"
-        l_num = l_key.replace("l", "")
-        text += f"Вопрос {l_num}: {option_text}\n"
-    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="Назад в меню", callback_data="back_to_menu")]
-    ])
+        try: option_text = QUESTIONS_LIBIDO[l_key]["options"][ans_idx]
+        except: option_text = "—"
+        text += f"Вопрос {l_key.replace('l', '')}: {option_text}\n"
+    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="Назад в меню", callback_data="back_to_menu")]])
     await callback.message.edit_text(text, reply_markup=keyboard)
 
 @dp.callback_query(F.data == "top_10_q")
@@ -372,29 +393,13 @@ async def show_top_10_q(callback: types.CallbackQuery):
     await callback.answer("Ищу совпадения...")
     await _show_top(callback, 'q', QUESTIONS, '24 вопроса')
 
-@dp.callback_query(F.data == "top_10_l")
-async def show_top_10_l(callback: types.CallbackQuery):
-    await callback.answer("Ищу совпадения...")
-    await _show_top(callback, 'l', QUESTIONS_LIBIDO, 'Либидо')
-
 async def _show_top(callback: types.CallbackQuery, prefix, questions, test_name):
     user_id = callback.from_user.id
     my_answers = get_user_answers(user_id)
     my_answers = {k: v for k, v in my_answers.items() if k.startswith(prefix)}
-    if not my_answers:
-        await callback.message.edit_text(
-            f"Ты ещё не прошёл тест {test_name}. Сначала пройди его.",
-            reply_markup=get_main_keyboard()
-        )
-        return
+    if not my_answers: return await callback.message.edit_text(f"Ты ещё не прошёл тест {test_name}. Сначала пройди его.", reply_markup=get_main_keyboard())
     pool_ids = get_pool_users(user_id, prefix)
-    if not pool_ids:
-        await callback.message.edit_text(
-            f"Пока никто, кроме тебя, не прошёл тест {test_name}. "
-            "Пригласи друзей или попробуй позже.",
-            reply_markup=get_main_keyboard()
-        )
-        return
+    if not pool_ids: return await callback.message.edit_text(f"Пока никто, кроме тебя, не прошёл тест {test_name}.", reply_markup=get_main_keyboard())
     matches = []
     for uid in pool_ids:
         other_answers = get_user_answers(uid)
@@ -402,42 +407,23 @@ async def _show_top(callback: types.CallbackQuery, prefix, questions, test_name)
         score, total, percent = calc_compatibility(my_answers, other_answers, questions)
         if total > 0:
             other_user = get_user_full(uid)
-            if not other_user:
-                continue
-            matches.append({
-                'telegram_id': uid,
-                'nickname': other_user['nickname'],
-                'age': other_user['age'],
-                'gender': other_user['gender'],
-                'score': score,
-                'total': total,
-                'percent': percent,
-            })
+            if not other_user: continue
+            matches.append({'telegram_id': uid, 'nickname': other_user['nickname'], 'age': other_user['age'], 'gender': other_user['gender'], 'score': score, 'total': total, 'percent': percent})
     matches.sort(key=lambda x: (x['percent'], x['total']), reverse=True)
     top = matches[:10]
-    if not top:
-        await callback.message.edit_text(
-            f"Не удалось найти совпадений по тесту {test_name}. Попробуй позже.",
-            reply_markup=get_main_keyboard()
-        )
-        return
+    if not top: return await callback.message.edit_text(f"Не удалось найти совпадений.", reply_markup=get_main_keyboard())
     
     lines = [f"🏆 Топ-{len(top)} совпадений ({test_name}):\n"]
     buttons = []
     for i, m in enumerate(top, 1):
         parts = [m['nickname']]
-        if m['gender']:
-            parts.append(m['gender'])
-        if m['age']:
-            parts.append(str(m['age']))
-        label = ", ".join(parts)
-        lines.append(f"{i}. {label} — {m['percent']}% ({m['score']}/{m['total']})")
+        if m['gender']: parts.append(m['gender'])
+        if m['age']: parts.append(str(m['age']))
+        lines.append(f"{i}. {', '.join(parts)} — {m['percent']}% ({m['score']}/{m['total']})")
         buttons.append([types.InlineKeyboardButton(text=f"✉️ Написать {m['nickname']}", callback_data=f"msgto_{m['telegram_id']}")])
     
     buttons.append([types.InlineKeyboardButton(text="Назад в меню", callback_data="back_to_menu")])
-    keyboard = types.InlineKeyboardMarkup(inline_keyboard=buttons)
-    
-    await callback.message.edit_text("\n".join(lines), reply_markup=keyboard)
+    await callback.message.edit_text("\n".join(lines), reply_markup=types.InlineKeyboardMarkup(inline_keyboard=buttons))
 
 @dp.callback_query(F.data == "find_match")
 async def ask_friend_nickname(callback: types.CallbackQuery, state: FSMContext):
@@ -446,79 +432,30 @@ async def ask_friend_nickname(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.message(Form.waiting_for_friend_nickname)
 async def process_friend_nickname(message: types.Message, state: FSMContext):
-    if not message.text:
-        await message.answer("Пришли текстом, пожалуйста.", reply_markup=get_main_keyboard())
-        await state.clear()
-        return
     query = message.text.strip()
-    user_id = message.from_user.id
-    
     matches = search_users_by_nickname(query)
-    matches = [m for m in matches if m['telegram_id'] != user_id]
-    
-    if not matches:
-        await message.answer(
-            f"Пользователи с ником, содержащим «{query}», не найдены. Попробуй ещё раз или напиши /start.",
-            reply_markup=get_main_keyboard()
-        )
-        await state.clear()
-        return
-        
+    matches = [m for m in matches if m['telegram_id'] != message.from_user.id]
+    if not matches: return await message.answer(f"Пользователи с ником, содержащим «{query}», не найдены.", reply_markup=get_main_keyboard())
     buttons = []
-    for m in matches[:15]: # Показываем до 15 результатов
-        label = m['nickname']
-        if m['gender']: label += f", {m['gender']}"
-        if m['age']: label += f", {m['age']}"
+    for m in matches[:15]:
+        label = m['nickname'] + (f", {m['gender']}" if m['gender'] else "") + (f", {m['age']}" if m['age'] else "")
         buttons.append([types.InlineKeyboardButton(text=label, callback_data=f"selmatch_q_{m['telegram_id']}")])
-        
     buttons.append([types.InlineKeyboardButton(text="Отмена", callback_data="back_to_menu")])
-    keyboard = types.InlineKeyboardMarkup(inline_keyboard=buttons)
-    
-    await message.answer(
-        f"Найдено несколько пользователей по запросу «{query}». Выбери нужного:",
-        reply_markup=keyboard
-    )
+    await message.answer(f"Найдено несколько пользователей по запросу «{query}». Выбери нужного:", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=buttons))
     await state.clear()
-
-@dp.callback_query(F.data == "find_match_libido")
-async def ask_libido_friend_nickname(callback: types.CallbackQuery, state: FSMContext):
-    await state.set_state(Form.waiting_for_libido_friend_nickname)
-    await callback.message.edit_text("Введи часть никнейма для поиска по Либидо:")
 
 @dp.message(Form.waiting_for_libido_friend_nickname)
 async def process_libido_friend_nickname(message: types.Message, state: FSMContext):
-    if not message.text:
-        await message.answer("Пришли текстом, пожалуйста.", reply_markup=get_main_keyboard())
-        await state.clear()
-        return
     query = message.text.strip()
-    user_id = message.from_user.id
-    
     matches = search_users_by_nickname(query)
-    matches = [m for m in matches if m['telegram_id'] != user_id]
-    
-    if not matches:
-        await message.answer(
-            f"Пользователи с ником, содержащим «{query}», не найдены. Попробуй ещё раз или напиши /start.",
-            reply_markup=get_main_keyboard()
-        )
-        await state.clear()
-        return
-        
+    matches = [m for m in matches if m['telegram_id'] != message.from_user.id]
+    if not matches: return await message.answer(f"Пользователи с ником, содержащим «{query}», не найдены.", reply_markup=get_main_keyboard())
     buttons = []
     for m in matches[:15]:
-        label = m['nickname']
-        if m['gender']: label += f", {m['gender']}"
-        if m['age']: label += f", {m['age']}"
+        label = m['nickname'] + (f", {m['gender']}" if m['gender'] else "") + (f", {m['age']}" if m['age'] else "")
         buttons.append([types.InlineKeyboardButton(text=label, callback_data=f"selmatch_l_{m['telegram_id']}")])
-        
     buttons.append([types.InlineKeyboardButton(text="Отмена", callback_data="back_to_menu")])
-    keyboard = types.InlineKeyboardMarkup(inline_keyboard=buttons)
-    
-    await message.answer(
-        f"Найдено несколько пользователей по запросу «{query}». Выбери нужного:",
-        reply_markup=keyboard
-    )
+    await message.answer(f"Найдено несколько пользователей по запросу «{query}». Выбери нужного:", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=buttons))
     await state.clear()
 
 @dp.callback_query(F.data.startswith("selmatch_"))
@@ -527,87 +464,56 @@ async def process_selected_match(callback: types.CallbackQuery):
     prefix = data[1]
     target_id = int(data[2])
     user_id = callback.from_user.id
-    
     target_nick = get_user_nickname(target_id) or "Пользователь"
     
-    ans_a = get_user_answers(user_id)
-    ans_b = get_user_answers(target_id)
+    ans_a = {k: v for k, v in get_user_answers(user_id).items() if k.startswith(prefix)}
+    ans_b = {k: v for k, v in get_user_answers(target_id).items() if k.startswith(prefix)}
     
-    ans_a = {k: v for k, v in ans_a.items() if k.startswith(prefix)}
-    ans_b = {k: v for k, v in ans_b.items() if k.startswith(prefix)}
-    
-    if not ans_b:
-        await callback.answer(f"{target_nick} еще не прошел этот тест.", show_alert=True)
-        return
-    if not ans_a:
-        await callback.answer("Ты ещё не прошел этот тест.", show_alert=True)
-        return
+    if not ans_b: return await callback.answer(f"{target_nick} еще не прошел этот тест.", show_alert=True)
+    if not ans_a: return await callback.answer("Ты ещё не прошел этот тест.", show_alert=True)
         
     questions = QUESTIONS if prefix == 'q' else QUESTIONS_LIBIDO
     test_name = "24 вопроса" if prefix == 'q' else "Либидо"
-    
     score, total, percent = calc_compatibility(ans_a, ans_b, questions)
     
     keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text=f"✉️ Написать {target_nick}", callback_data=f"msgto_{target_id}")],
         [types.InlineKeyboardButton(text="В меню", callback_data="back_to_menu")]
     ])
-    
-    await callback.message.edit_text(
-        f"Совпадение ({test_name}) с {target_nick}:\n"
-        f"🎯 {percent}%\n\n"
-        f"(Совпало {score} из {total} общих ответов)",
-        reply_markup=keyboard
-    )
+    await callback.message.edit_text(f"Совпадение ({test_name}) с {target_nick}:\n🎯 {percent}%\n\n(Совпало {score} из {total} общих ответов)", reply_markup=keyboard)
 
 @dp.callback_query(F.data.startswith("msgto_"))
 async def start_writing_message(callback: types.CallbackQuery, state: FSMContext):
     target_id = int(callback.data.split("_")[1])
-    
-    if target_id == callback.from_user.id:
-        await callback.answer("Нельзя написать самому себе!", show_alert=True)
-        return
-        
+    if target_id == callback.from_user.id: return await callback.answer("Нельзя написать самому себе!", show_alert=True)
     target_nick = get_user_nickname(target_id) or "Пользователь"
     await state.update_data(target_id=target_id, target_nick=target_nick)
     await state.set_state(Form.waiting_for_msg_text)
-    
-    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="Отмена", callback_data="back_to_menu")]
-    ])
-    
-    await callback.message.edit_text(
-        f"✉️ Напиши сообщение для пользователя <b>{target_nick}</b>.\n"
-        f"Он получит его от бота анонимно.",
-        reply_markup=keyboard,
-        parse_mode="HTML"
-    )
+    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="Отмена", callback_data="back_to_menu")]])
+    await callback.message.edit_text(f"✉️ Напиши сообщение для пользователя <b>{target_nick}</b>.\nОн получит его от бота анонимно.", reply_markup=keyboard, parse_mode="HTML")
 
 @dp.message(Form.waiting_for_msg_text)
 async def send_message_to_user(message: types.Message, state: FSMContext):
-    if not message.text:
-        await message.answer("Пожалуйста, отправь текст сообщения.")
-        return
-
+    if not message.text: return await message.answer("Пожалуйста, отправь текст сообщения.")
     data = await state.get_data()
     target_id = data.get('target_id')
-    target_nick = data.get('target_nick')
     sender_nick = get_user_nickname(message.from_user.id) or "Кто-то"
+    
+    reply_kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="✉️ Ответить", callback_data=f"msgto_{message.from_user.id}")]
+    ])
     
     try:
         await bot.send_message(
             target_id, 
-            f"💌 <b>Новое сообщение!</b>\n\n"
-            f"От: <b>{sender_nick}</b>\n\n"
-            f"{message.text}\n\n"
-            f"<i>(Чтобы ответить, найди {sender_nick} в Топ-10 или через Поиск по нику)</i>",
+            f"💌 <b>Новое сообщение!</b>\n\nОт: <b>{sender_nick}</b>\n\n{message.text}",
+            reply_markup=reply_kb,
             parse_mode="HTML"
         )
         await message.answer("✅ Сообщение успешно отправлено!", reply_markup=get_main_keyboard())
     except Exception as e:
-        logging.error(f"Ошибка отправки сообщения {target_id}: {e}")
-        await message.answer("⚠️ Не удалось отправить сообщение. Возможно, пользователь заблокировал бота.", reply_markup=get_main_keyboard())
-    
+        logging.error(f"Ошибка отправки {target_id}: {e}")
+        await message.answer("⚠️ Не удалось отправить сообщение (возможно, заблокирован бот).", reply_markup=get_main_keyboard())
     await state.clear()
 
 @dp.callback_query(F.data == "back_to_menu")
@@ -615,82 +521,63 @@ async def back_to_menu(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     user_id = callback.from_user.id
     nickname = get_user_nickname(user_id) or "друг"
-    await callback.message.edit_text(
-        f"Привет, {nickname}! Выбери действие:",
-        reply_markup=get_main_keyboard()
-    )
+    await callback.message.edit_text(f"Привет, {nickname}! Выбери действие:", reply_markup=get_main_keyboard())
 
 async def send_question_24(message: types.Message, q_key: str):
     q_data = QUESTIONS.get(q_key)
-    if not q_data:
-        return
-    question_text = q_data["text"]
-    options = q_data["options"]
-    buttons = [[types.InlineKeyboardButton(text=opt, callback_data=f"ans_{q_key}_{i}")] for i, opt in enumerate(options)]
-    keyboard = types.InlineKeyboardMarkup(inline_keyboard=buttons)
-    q_num = q_key.replace("q", "")
-    await message.edit_text(f"Вопрос {q_num}: {question_text}", reply_markup=keyboard)
+    if not q_data: return
+    buttons = [[types.InlineKeyboardButton(text=opt, callback_data=f"ans_{q_key}_{i}")] for i, opt in enumerate(q_data["options"])]
+    await message.edit_text(f"Вопрос {q_key.replace('q', '')}: {q_data['text']}", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=buttons))
 
 async def send_question_libido(message: types.Message, l_key: str):
     l_data = QUESTIONS_LIBIDO.get(l_key)
-    if not l_data:
-        return
-    question_text = l_data["text"]
-    options = l_data["options"]
-    buttons = [[types.InlineKeyboardButton(text=opt, callback_data=f"lans_{l_key}_{i}")] for i, opt in enumerate(options)]
-    keyboard = types.InlineKeyboardMarkup(inline_keyboard=buttons)
-    l_num = l_key.replace("l", "")
-    await message.edit_text(f"Вопрос {l_num} (Либидо): {question_text}", reply_markup=keyboard)
+    if not l_data: return
+    buttons = [[types.InlineKeyboardButton(text=opt, callback_data=f"lans_{l_key}_{i}")] for i, opt in enumerate(l_data["options"])]
+    await message.edit_text(f"Вопрос {l_key.replace('l', '')} (Либидо): {l_data['text']}", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=buttons))
 
 @dp.callback_query(F.data.startswith("ans_"))
 async def process_answer_24(callback: types.CallbackQuery):
     data = callback.data.split("_")
     q_key = data[1]
-    answer_index = int(data[2])
-    user_id = callback.from_user.id
-    save_answer(user_id, q_key, answer_index)
+    save_answer(callback.from_user.id, q_key, int(data[2]))
     q_num = int(q_key.replace("q", ""))
-    next_q_key = f"q{q_num + 1}"
-    if next_q_key in QUESTIONS:
-        await send_question_24(callback.message, next_q_key)
+    next_q = f"q{q_num + 1}"
+    if next_q in QUESTIONS:
+        await send_question_24(callback.message, next_q)
     else:
         keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="Посмотреть мои ответы (24)", callback_data="my_answers")],
+            [types.InlineKeyboardButton(text="Посмотреть ответы (24)", callback_data="my_answers")],
             [types.InlineKeyboardButton(text="🏆 Топ-10 (24)", callback_data="top_10_q")],
             [types.InlineKeyboardButton(text="В меню", callback_data="back_to_menu")]
         ])
-        await callback.message.edit_text("🎉 Поздравляю! Ты ответил на все 24 вопроса. Тест завершен!", reply_markup=keyboard)
+        await callback.message.edit_text("🎉 Поздравляю! Ты ответил на все 24 вопроса.", reply_markup=keyboard)
 
 @dp.callback_query(F.data.startswith("lans_"))
 async def process_answer_libido(callback: types.CallbackQuery):
     data = callback.data.split("_")
     l_key = data[1]
-    answer_index = int(data[2])
-    user_id = callback.from_user.id
-    save_answer(user_id, l_key, answer_index)
+    save_answer(callback.from_user.id, l_key, int(data[2]))
     l_num = int(l_key.replace("l", ""))
-    next_l_key = f"l{l_num + 1}"
-    if next_l_key in QUESTIONS_LIBIDO:
-        await send_question_libido(callback.message, next_l_key)
+    next_l = f"l{l_num + 1}"
+    if next_l in QUESTIONS_LIBIDO:
+        await send_question_libido(callback.message, next_l)
     else:
         keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="Посмотреть мои ответы (Либидо)", callback_data="my_answers_libido")],
+            [types.InlineKeyboardButton(text="Посмотреть ответы (Либидо)", callback_data="my_answers_libido")],
             [types.InlineKeyboardButton(text="🏆 Топ-10 (Либидо)", callback_data="top_10_l")],
             [types.InlineKeyboardButton(text="В меню", callback_data="back_to_menu")]
         ])
-        await callback.message.edit_text("🎉 Поздравляю! Ты ответил на все 11 вопросов теста Либидо. Тест завершен!", reply_markup=keyboard)
+        await callback.message.edit_text("🎉 Поздравляю! Ты ответил на все 11 вопросов Либидо.", reply_markup=keyboard)
 
 @dp.message(Command("profile"))
 async def cmd_profile(message: types.Message, state: FSMContext):
     await state.clear()
     user = get_user_full(message.from_user.id)
-    if not user or not user['nickname']:
-        await message.answer("Сначала пройди регистрацию: /start")
-        return
+    if not user or not user['nickname']: return await message.answer("Сначала пройди регистрацию: /start")
     age = user['age'] if user['age'] is not None else "не указан"
     gender = user['gender'] if user['gender'] else "не указан"
-    text = f"👤 Твой профиль:\n\nНик: {user['nickname']}\nВозраст: {age}\nПол: {gender}"
-    await message.answer(text, reply_markup=get_main_keyboard())
+    balance = user.get('libido_balance', 0)
+    await message.answer(f"👤 Твой профиль:\n\nНик: {user['nickname']}\nВозраст: {age}\nПол: {gender}\n💎 Баланс Либидо: {balance} попыток", reply_markup=get_main_keyboard())
 
 @dp.message(Command("delete_me"))
 async def cmd_delete_me(message: types.Message, state: FSMContext):
