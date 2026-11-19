@@ -14,7 +14,7 @@ try:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     DB_PATH = str(DATA_DIR / "bot_database.db")
 except Exception:
-    DB_PATH = "bot_database.db"  # Для локального запуска
+    DB_PATH = "bot_database.db"
 
 TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(token=TOKEN)
@@ -159,6 +159,7 @@ class Form(StatesGroup):
     waiting_for_gender = State()
     waiting_for_friend_nickname = State()
     waiting_for_libido_friend_nickname = State()
+    waiting_for_msg_text = State()  # Новое состояние для сообщений
 
 QUESTIONS = {
     "q1": {"text": "Как вы предпочитаете проводить свободное время?", "options": ["В компании", "В уединении"]},
@@ -209,8 +210,8 @@ def get_main_keyboard():
         [types.InlineKeyboardButton(text="Мои ответы (Либидо)", callback_data="my_answers_libido")],
         [types.InlineKeyboardButton(text="🏆 Топ-10 (24)", callback_data="top_10_q")],
         [types.InlineKeyboardButton(text="🏆 Топ-10 (Либидо)", callback_data="top_10_l")],
-        [types.InlineKeyboardButton(text="Совместимость по нику (24)", callback_data="find_match")],
-        [types.InlineKeyboardButton(text="Совместимость по нику (Либидо)", callback_data="find_match_libido")]
+        [types.InlineKeyboardButton(text="Поиск по нику (24)", callback_data="find_match")],
+        [types.InlineKeyboardButton(text="Поиск по нику (Либидо)", callback_data="find_match_libido")]
     ])
 
 def get_consent_keyboard():
@@ -230,7 +231,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     user = get_user_full(user_id)
     if not user or not user['consent']:
-        text = ("Привет! Это бот для поиска людей по совместимости.\n\n"
+        text = ("Привет! Это бот для поиска людей по совпадениям.\n\n"
                 "Продолжая, ты соглашаешься на обработку твоих ответов, ника, возраста и пола "
                 "для работы сервиса. Данные хранятся в БД бота и не передаются третьим лицам. "
                 "Ты можешь удалить себя командой /delete_me.")
@@ -404,6 +405,7 @@ async def _show_top(callback: types.CallbackQuery, prefix, questions, test_name)
             if not other_user:
                 continue
             matches.append({
+                'telegram_id': uid,
                 'nickname': other_user['nickname'],
                 'age': other_user['age'],
                 'gender': other_user['gender'],
@@ -419,7 +421,9 @@ async def _show_top(callback: types.CallbackQuery, prefix, questions, test_name)
             reply_markup=get_main_keyboard()
         )
         return
-    lines = [f"🏆 Топ-{len(top)} совместимости ({test_name}):\n"]
+    
+    lines = [f"🏆 Топ-{len(top)} совпадений ({test_name}):\n"]
+    buttons = []
     for i, m in enumerate(top, 1):
         parts = [m['nickname']]
         if m['gender']:
@@ -428,15 +432,18 @@ async def _show_top(callback: types.CallbackQuery, prefix, questions, test_name)
             parts.append(str(m['age']))
         label = ", ".join(parts)
         lines.append(f"{i}. {label} — {m['percent']}% ({m['score']}/{m['total']})")
-    await callback.message.edit_text(
-        "\n".join(lines),
-        reply_markup=get_main_keyboard()
-    )
+        # Добавляем кнопку "Написать" для каждого человека
+        buttons.append([types.InlineKeyboardButton(text=f"✉️ Написать {m['nickname']}", callback_data=f"msgto_{m['telegram_id']}")])
+    
+    buttons.append([types.InlineKeyboardButton(text="Назад в меню", callback_data="back_to_menu")])
+    keyboard = types.InlineKeyboardMarkup(inline_keyboard=buttons)
+    
+    await callback.message.edit_text("\n".join(lines), reply_markup=keyboard)
 
 @dp.callback_query(F.data == "find_match")
 async def ask_friend_nickname(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(Form.waiting_for_friend_nickname)
-    await callback.message.edit_text("Введи никнейм друга для сравнения по 24 вопросам:")
+    await callback.message.edit_text("Введи никнейм друга для поиска совпадений по 24 вопросам:")
 
 @dp.message(Form.waiting_for_friend_nickname)
 async def process_friend_nickname(message: types.Message, state: FSMContext):
@@ -480,18 +487,24 @@ async def process_friend_nickname(message: types.Message, state: FSMContext):
         await state.clear()
         return
     score, total, percent = calc_compatibility(ans_a, ans_b, QUESTIONS)
+    
+    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text=f"✉️ Написать {friend_nickname}", callback_data=f"msgto_{friend_id}")],
+        [types.InlineKeyboardButton(text="В меню", callback_data="back_to_menu")]
+    ])
+    
     await message.answer(
-        f"Совместимость (24 вопроса) с {friend_nickname}:\n"
+        f"Совпадение (24 вопроса) с {friend_nickname}:\n"
         f"🎯 {percent}%\n\n"
         f"(Совпало {score} из {total} общих ответов)",
-        reply_markup=get_main_keyboard()
+        reply_markup=keyboard
     )
     await state.clear()
 
 @dp.callback_query(F.data == "find_match_libido")
 async def ask_libido_friend_nickname(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(Form.waiting_for_libido_friend_nickname)
-    await callback.message.edit_text("Введи никнейм друга для сравнения по Либидо:")
+    await callback.message.edit_text("Введи никнейм друга для поиска совпадений по Либидо:")
 
 @dp.message(Form.waiting_for_libido_friend_nickname)
 async def process_libido_friend_nickname(message: types.Message, state: FSMContext):
@@ -535,13 +548,71 @@ async def process_libido_friend_nickname(message: types.Message, state: FSMConte
         await state.clear()
         return
     score, total, percent = calc_compatibility(ans_a, ans_b, QUESTIONS_LIBIDO)
+    
+    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text=f"✉️ Написать {friend_nickname}", callback_data=f"msgto_{friend_id}")],
+        [types.InlineKeyboardButton(text="В меню", callback_data="back_to_menu")]
+    ])
+
     await message.answer(
-        f"Совместимость (Либидо) с {friend_nickname}:\n"
+        f"Совпадение (Либидо) с {friend_nickname}:\n"
         f"🎯 {percent}%\n\n"
         f"(Совпало {score} из {total} общих ответов)",
-        reply_markup=get_main_keyboard()
+        reply_markup=keyboard
     )
     await state.clear()
+
+# --- НОВЫЕ ОБРАБОТЧИКИ ДЛЯ ОТПРАВКИ СООБЩЕНИЙ ---
+@dp.callback_query(F.data.startswith("msgto_"))
+async def start_writing_message(callback: types.CallbackQuery, state: FSMContext):
+    target_id = int(callback.data.split("_")[1])
+    
+    if target_id == callback.from_user.id:
+        await callback.answer("Нельзя написать самому себе!", show_alert=True)
+        return
+        
+    target_nick = get_user_nickname(target_id) or "Пользователь"
+    await state.update_data(target_id=target_id, target_nick=target_nick)
+    await state.set_state(Form.waiting_for_msg_text)
+    
+    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="Отмена", callback_data="back_to_menu")]
+    ])
+    
+    await callback.message.edit_text(
+        f"✉️ Напиши сообщение для пользователя <b>{target_nick}</b>.\n"
+        f"Он получит его от бота анонимно.",
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+
+@dp.message(Form.waiting_for_msg_text)
+async def send_message_to_user(message: types.Message, state: FSMContext):
+    if not message.text:
+        await message.answer("Пожалуйста, отправь текст сообщения.")
+        return
+
+    data = await state.get_data()
+    target_id = data.get('target_id')
+    target_nick = data.get('target_nick')
+    sender_nick = get_user_nickname(message.from_user.id) or "Кто-то"
+    
+    try:
+        await bot.send_message(
+            target_id, 
+            f"💌 <b>Новое сообщение!</b>\n\n"
+            f"От: <b>{sender_nick}</b>\n\n"
+            f"{message.text}\n\n"
+            f"<i>(Чтобы ответить, найди {sender_nick} в Топ-10 или через Поиск по нику)</i>",
+            parse_mode="HTML"
+        )
+        await message.answer("✅ Сообщение успешно отправлено!", reply_markup=get_main_keyboard())
+    except Exception as e:
+        logging.error(f"Ошибка отправки сообщения {target_id}: {e}")
+        await message.answer("⚠️ Не удалось отправить сообщение. Возможно, пользователь заблокировал бота.", reply_markup=get_main_keyboard())
+    
+    await state.clear()
+# ------------------------------------------------
 
 @dp.callback_query(F.data == "back_to_menu")
 async def back_to_menu(callback: types.CallbackQuery, state: FSMContext):
@@ -588,7 +659,9 @@ async def process_answer_24(callback: types.CallbackQuery):
         await send_question_24(callback.message, next_q_key)
     else:
         keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="Посмотреть мои ответы (24)", callback_data="my_answers")]
+            [types.InlineKeyboardButton(text="Посмотреть мои ответы (24)", callback_data="my_answers")],
+            [types.InlineKeyboardButton(text="🏆 Топ-10 (24)", callback_data="top_10_q")],
+            [types.InlineKeyboardButton(text="В меню", callback_data="back_to_menu")]
         ])
         await callback.message.edit_text("🎉 Поздравляю! Ты ответил на все 24 вопроса. Тест завершен!", reply_markup=keyboard)
 
@@ -605,7 +678,9 @@ async def process_answer_libido(callback: types.CallbackQuery):
         await send_question_libido(callback.message, next_l_key)
     else:
         keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="Посмотреть мои ответы (Либидо)", callback_data="my_answers_libido")]
+            [types.InlineKeyboardButton(text="Посмотреть мои ответы (Либидо)", callback_data="my_answers_libido")],
+            [types.InlineKeyboardButton(text="🏆 Топ-10 (Либидо)", callback_data="top_10_l")],
+            [types.InlineKeyboardButton(text="В меню", callback_data="back_to_menu")]
         ])
         await callback.message.edit_text("🎉 Поздравляю! Ты ответил на все 11 вопросов теста Либидо. Тест завершен!", reply_markup=keyboard)
 
